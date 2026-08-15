@@ -969,16 +969,20 @@
             ${(c.implementer_run_ids || []).filter((rid) => rid !== rec).map((rid) => `<button type="button" class="small" data-approve="${rid}">approve ${escapeHtml(labelRun(rid))}</button>`).join("")}
             <button type="button" class="small" data-veto>veto all</button>
           </div>` : ""}
-          ${approved ? `<div class="row">
-            <button type="button" class="small" data-apply ${applied ? "disabled" : ""}>apply winner</button>
-            <button type="button" class="small" data-revert ${applied ? "" : "disabled"}>revert apply</button>
+          ${approved && !applied ? `<div class="row">
+            ${(c.implementer_run_ids || []).map((rid) => `<button type="button" class="small${rid === (c.winner_run_id || rec) ? " primary" : ""}" data-apply="${rid}">apply ${escapeHtml(labelRun(rid))}${rid === c.winner_run_id ? " ★" : ""}</button>`).join("")}
+          </div>` : ""}
+          ${approved && applied ? `<div class="row">
+            <small>on disk: ${escapeHtml(labelRun(c.applied_run_id || c.winner_run_id || ""))}</small>
+            <button type="button" class="small" data-revert>revert apply</button>
           </div>` : ""}
           ${c.reason ? `<small>${escapeHtml(c.reason)}</small>` : ""}`;
         el.querySelectorAll("[data-approve]").forEach((btn) => {
           btn.onclick = (e) => { e.stopPropagation(); sendVerdict(c.id, "approve", btn.getAttribute("data-approve")); };
         });
-        const applyBtn = el.querySelector("[data-apply]");
-        if (applyBtn) applyBtn.onclick = (e) => { e.stopPropagation(); applyContest(c.id); };
+        el.querySelectorAll("[data-apply]").forEach((btn) => {
+          btn.onclick = (e) => { e.stopPropagation(); applyContest(c.id, btn.getAttribute("data-apply")); };
+        });
         const revertBtn = el.querySelector("[data-revert]");
         if (revertBtn) revertBtn.onclick = (e) => { e.stopPropagation(); revertContest(c.id); };
         const veto = el.querySelector("[data-veto]");
@@ -1185,14 +1189,16 @@
       }
     }
 
-    async function contestAction(contestId, action) {
+    async function contestAction(contestId, action, runId) {
       if (!current) return;
       if (action === "apply") {
         let preview = {};
-        try { preview = await api(`/api/projects/${current}/contests/${contestId}/apply-preview`); }
+        const q = runId ? ("?run_id=" + encodeURIComponent(runId)) : "";
+        try { preview = await api(`/api/projects/${current}/contests/${contestId}/apply-preview` + q); }
         catch (e) { /* still confirm */ }
         const bits = [
-          "Merge the winning worktree onto this project?",
+          "Merge this worktree onto the project?",
+          runId ? "Run: " + runId : "",
           preview.branch ? "Branch: " + preview.branch : "",
           preview.dirty ? "Your uncommitted files will be stashed, then put back on top of the merge." : "",
           preview.commits_ahead_of_winner ? ("Current tree is " + preview.commits_ahead_of_winner + " commit(s) ahead of the winner — merge, not rebase.") : "",
@@ -1208,7 +1214,7 @@
         const data = await api(`/api/projects/${current}/contests/${contestId}/${action}`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: "{}",
+          body: JSON.stringify(runId ? { run_id: runId } : {}),
         });
         $("hint").textContent = data.reply || action + " ok";
         await refreshHealth();
@@ -1218,7 +1224,7 @@
         $("hint").className = "err";
       }
     }
-    function applyContest(id) { return contestAction(id, "apply"); }
+    function applyContest(id, runId) { return contestAction(id, "apply", runId); }
     function revertContest(id) { return contestAction(id, "revert"); }
 
     async function sendVerdict(contestId, decision, winner) {

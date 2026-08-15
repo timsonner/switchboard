@@ -372,9 +372,11 @@ VERDICT_RE = re.compile(
     re.DOTALL,
 )
 WORK_HINT = re.compile(
-    r"\b(delegat\w*|dispatch\w*|implement\w*|continue|improve|team|workers?|agents?|build|fix|ship|do it|go for it|contest|review)\b",
+    r"\b(delegat\w*|dispatch\w*|implement\w*|continue|improve|team|workers?|agents?|"
+    r"build|fix|ship|do it|go for it|contests?|reviews?|columns?|tabs?|layout|ui)\b",
     re.I,
 )
+GROK_WILL_CONTEST = re.compile(r"\b(contest|implementers?|dispatch)\b", re.I)
 DEFAULT_IMPL = ("codex", "hermes", "copilot", "opencode", "agy")
 
 
@@ -680,7 +682,7 @@ def run_grok_desk(project: dict, user_text: str) -> str:
     out = call_grok(prompt, project["dir"])
     awaiting = [c for c in open_contests if c.get("status") == "awaiting_desk"]
     inflight = [c for c in open_contests if c.get("status") in ("competing", "reviewing")]
-    wants = bool(WORK_HINT.search(user_text))
+    wants = bool(WORK_HINT.search(user_text) or GROK_WILL_CONTEST.search(out))
     if awaiting and "<<<SWITCHBOARD_VERDICT" not in out and not out.startswith("("):
         retry = prompt + (
             "\n\nA contest is awaiting your verdict. Emit one "
@@ -824,7 +826,7 @@ def launch_run_work(cfg: dict, project: dict, card: dict, rdir: Path, session: s
                     return
 
         threading.Thread(target=attach, daemon=True).start()
-        timeout = 1200 if card.get("allow_tools") else 240
+        timeout = 1200 if card.get("allow_tools") or card.get("role") == "review" else 240
         try:
             result = run_offload(
                 cfg,
@@ -1112,7 +1114,8 @@ def start_review(cfg: dict, project: dict, contest: dict) -> None:
         f"Goal: {contest.get('goal')}",
         "Recommend exactly one winner. End with a line: Winner: <8-char-run-id>",
         "Or: Winner: veto-all. Do not approve or apply anything yourself.",
-        "Do not spawn other harness CLIs.",
+        "Read candidate files with read tools. Prefer the git stat already in this prompt.",
+        "Do not write files. Do not spawn other harness CLIs.",
     ]
     for rid in contest.get("implementer_run_ids") or []:
         card = load_run(project["id"], rid) or {}
@@ -1204,15 +1207,18 @@ def git_head(directory: str) -> str | None:
     return out or None if code == 0 else None
 
 
-def apply_winner(project: dict, contest: dict) -> tuple[str, dict]:
+def apply_winner(project: dict, contest: dict, run_id: str = "") -> tuple[str, dict]:
     if contest.get("status") != "approved":
         raise ValueError("approve a winner before applying")
     if contest.get("applied"):
-        raise ValueError("winner is already applied — revert first")
+        raise ValueError("a tree is already applied — revert first")
     if dir_busy(project["dir"]):
         raise ValueError("a worker is still writing the project dir")
-    winner_id = contest.get("winner_run_id")
-    win = load_run(project["id"], winner_id) if winner_id else None
+    candidates = list(contest.get("implementer_run_ids") or [])
+    winner_id = (run_id or contest.get("winner_run_id") or "").strip()
+    if winner_id not in candidates:
+        raise ValueError("pick one of this contest's implementer runs to apply")
+    win = load_run(project["id"], winner_id)
     if not win:
         raise ValueError("winner run is missing")
     proj_dir = project["dir"]
@@ -1289,8 +1295,10 @@ def apply_winner(project: dict, contest: dict) -> tuple[str, dict]:
         "winner_commit": git_head(win_dir),
         "branch": branch,
         "changed": changed,
+        "applied_run_id": win["id"],
         "applied_at": utcnow(),
     }
+    contest["applied_run_id"] = win["id"]
     contest["updated_at"] = utcnow()
     save_contest(project["id"], contest)
     note = f"Applied {win.get('worker')} {win['id']} onto the project dir ({len(changed)} files)."
@@ -1322,8 +1330,9 @@ def ui_is_broken() -> str | None:
     return None
 
 
-def apply_preview(project: dict, contest: dict) -> dict:
-    win = load_run(project["id"], contest.get("winner_run_id") or "") if contest.get("winner_run_id") else None
+def apply_preview(project: dict, contest: dict, run_id: str = "") -> dict:
+    pick = (run_id or contest.get("winner_run_id") or "").strip()
+    win = load_run(project["id"], pick) if pick else None
     branch = f"sb/{(win or {}).get('worker')}-{(win or {}).get('id')}" if win else ""
     dirty = git_has_changes(project["dir"])
     behind = 0
@@ -1338,6 +1347,8 @@ def apply_preview(project: dict, contest: dict) -> dict:
         "dirty": dirty,
         "commits_ahead_of_winner": behind,
         "applied": bool(contest.get("applied")),
+        "applied_run_id": contest.get("applied_run_id"),
+        "run_id": pick,
         "self_host": norm_dir(project["dir"]) == norm_dir(str(ROOT)),
     }
 
@@ -1366,10 +1377,11 @@ def revert_apply(project: dict, contest: dict) -> tuple[str, dict]:
         if code != 0:
             raise ValueError(f"reset to {pre[:8]} but could not restore stash: {err or out}")
     contest["applied"] = False
+    contest["applied_run_id"] = None
     contest["reverted_at"] = utcnow()
     contest["updated_at"] = utcnow()
     save_contest(project["id"], contest)
-    return f"Reverted contest {contest['id']} to {pre[:8]}.", contest
+    return f"Reverted contest {contest['id']} to {pre[:8]}. You can apply another candidate.", contest
 
 
 def ask_desk_verdict(cfg: dict, project: dict, contest: dict) -> None:
@@ -1547,7 +1559,8 @@ class Handler(SimpleHTTPRequestHandler):
             if not contest:
                 return self._send(404, {"error": "no contest"})
             proj = load_project(m.group(1))
-            return self._send(200, apply_preview(proj, contest))
+            pick = (parse_qs(urlparse(self.path).query).get("run_id") or [""])[0]
+            return self._send(200, apply_preview(proj, contest, pick))
         m = re.fullmatch(r"/api/runs/([^/]+)", path)
         if m:
             found = find_run(m.group(1))
@@ -1685,7 +1698,7 @@ class Handler(SimpleHTTPRequestHandler):
                 return self._send(404, {"error": "no contest"})
             try:
                 if m.group(3) == "apply":
-                    note, contest = apply_winner(proj, contest)
+                    note, contest = apply_winner(proj, contest, (body.get("run_id") or ""))
                 else:
                     note, contest = revert_apply(proj, contest)
             except ValueError as exc:
