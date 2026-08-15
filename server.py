@@ -14,7 +14,7 @@ import uuid
 from datetime import datetime, timezone
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 ROOT = Path(__file__).resolve().parent
 UI_DIR = ROOT / "ui"
@@ -24,15 +24,60 @@ DEFAULT_SKILLS = (ROOT.parent / "agent-skills").resolve()
 WORKERS = ("agy", "opencode", "copilot", "codex", "hermes")
 
 _lock = threading.Lock()
+STARTED_AT = time.time()
 
 
 def utcnow() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
+def _code_is_stale() -> bool:
+    try:
+        return Path(__file__).stat().st_mtime > STARTED_AT + 1
+    except OSError:
+        return False
+
+
 def slugify(text: str) -> str:
     s = re.sub(r"[^a-zA-Z0-9]+", "-", text.strip().lower()).strip("-")
     return s[:64] or "project"
+
+
+def list_directory(raw: str) -> dict:
+    """List subfolders for the in-page picker. No GUI, no extra libraries."""
+    raw = (raw or "").strip()
+    if os.name == "nt" and raw in ("", "/", "\\"):
+        dirs = [{"name": "Home", "path": str(Path.home())}]
+        for letter in "ABCDEFGHIJKLMNOPQRSTUVWXYZ":
+            root = f"{letter}:\\"
+            if Path(root).exists():
+                dirs.append({"name": root, "path": root})
+        return {"path": "", "parent": None, "dirs": dirs}
+    if not raw:
+        raw = str(Path.home())
+    p = Path(raw)
+    if not p.exists() or not p.is_dir():
+        raise ValueError("not a directory")
+    p = p.resolve()
+    dirs = []
+    try:
+        children = list(p.iterdir())
+    except OSError as exc:
+        raise ValueError(str(exc)) from exc
+    for child in sorted(children, key=lambda c: c.name.lower()):
+        try:
+            if child.is_dir():
+                dirs.append({"name": child.name, "path": str(child)})
+        except OSError:
+            continue
+    parent: str | None
+    if os.name == "nt" and len(p.parts) == 1:
+        parent = ""
+    elif p.parent != p:
+        parent = str(p.parent)
+    else:
+        parent = None
+    return {"path": str(p), "parent": parent, "dirs": dirs}
 
 
 def refresh_path() -> None:
@@ -78,7 +123,16 @@ def load_config() -> dict:
     if not skills.is_absolute():
         skills = (ROOT / skills).resolve()
     cfg["agent_skills"] = str(skills)
+    env_token = (os.environ.get("SWITCHBOARD_TOKEN") or "").strip()
+    if env_token:
+        cfg["token"] = env_token
+    else:
+        cfg["token"] = str(cfg.get("token") or "").strip()
     return cfg
+
+
+def configured_token() -> str:
+    return str(load_config().get("token") or "").strip()
 
 
 def dispatcher_path(cfg: dict) -> Path:
@@ -182,13 +236,44 @@ def latest_sessions(pid: str) -> dict:
     return out
 
 
-def exit_status(result: dict) -> str:
+def exit_code_of(result: dict) -> int:
     raw = result.get("exit_code", 1)
     try:
-        code = int(raw)
+        return int(raw)
     except (TypeError, ValueError):
-        code = 1
-    return "done" if code == 0 else "error"
+        return 1
+
+
+def git_has_changes(directory: str) -> bool:
+    if not directory or not is_git_repo(directory):
+        return False
+    try:
+        proc = subprocess.run(
+            ["git", "-C", directory, "status", "--porcelain"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=15,
+        )
+    except Exception:
+        return False
+    return bool((proc.stdout or "").strip())
+
+
+def classify_run(result: dict, directory: str) -> tuple[str, str, int]:
+    """Return (status, outcome, exit_code).
+
+    Workers like AGY often exit 1 / empty stdout after writing a tree.
+    That is mixed success, not a clean failure.
+    """
+    code = exit_code_of(result)
+    dirty = git_has_changes(directory)
+    if code == 0:
+        return "done", "ok", code
+    if dirty:
+        return "done", "wrote_files", code
+    return "error", "failed", code
 
 
 def which_grok() -> str | None:
@@ -485,14 +570,13 @@ def create_worktree(project: dict, worker: str, rid: str) -> str:
     return str(dest.resolve())
 
 
-def git_snapshot(directory: str, limit: int = 6000) -> str:
+def git_snapshot(directory: str, limit: int = 2000) -> str:
     if not is_git_repo(directory):
         return "(not a git worktree)"
     chunks = []
     for args in (
         ["git", "-C", directory, "status", "-sb"],
         ["git", "-C", directory, "diff", "--stat"],
-        ["git", "-C", directory, "diff"],
     ):
         try:
             proc = subprocess.run(
@@ -574,7 +658,7 @@ def run_grok_desk(project: dict, user_text: str) -> str:
         desk.strip(),
         "",
         f"Project: {project.get('id')} dir={project.get('dir')}",
-        f"Brief: {project.get('brief') or '(none)'}",
+        f"Desk note (always in context): {project.get('brief') or '(none)'}",
         "",
         "Scoreboard (higher wins, lower vetoes — pick from this):",
     ]
@@ -595,6 +679,7 @@ def run_grok_desk(project: dict, user_text: str) -> str:
     prompt = "\n".join(lines)
     out = call_grok(prompt, project["dir"])
     awaiting = [c for c in open_contests if c.get("status") == "awaiting_desk"]
+    inflight = [c for c in open_contests if c.get("status") in ("competing", "reviewing")]
     wants = bool(WORK_HINT.search(user_text))
     if awaiting and "<<<SWITCHBOARD_VERDICT" not in out and not out.startswith("("):
         retry = prompt + (
@@ -608,6 +693,7 @@ def run_grok_desk(project: dict, user_text: str) -> str:
         and "<<<SWITCHBOARD_DISPATCH" not in out
         and not out.startswith("(")
         and not awaiting
+        and not inflight
     ):
         retry = prompt + (
             "\n\nThe human asked for work. Emit one <<<SWITCHBOARD_CONTEST {json} >>> "
@@ -619,6 +705,7 @@ def run_grok_desk(project: dict, user_text: str) -> str:
         and "<<<SWITCHBOARD_CONTEST" not in out
         and "<<<SWITCHBOARD_DISPATCH" not in out
         and not awaiting
+        and not inflight
     ):
         impl, reviewer = pick_team(project)
         fallback = {
@@ -752,12 +839,18 @@ def launch_run_work(cfg: dict, project: dict, card: dict, rdir: Path, session: s
             stop.set()
         stdout = result.get("stdout") or ""
         stderr = result.get("stderr") or ""
-        status = exit_status(result)
+        work_dir = card.get("dir") or project["dir"]
+        status, outcome, code = classify_run(result, work_dir)
+        summary = summarize(stdout, stderr)
+        if outcome == "wrote_files" and (not summary or summary == "no output"):
+            summary = f"wrote files (exit {code})"
         card.update(
             {
                 "status": status,
+                "outcome": outcome,
+                "exit_code": code,
                 "session_id": result.get("session_id") or card.get("session_id") or session or None,
-                "summary": summarize(stdout, stderr),
+                "summary": summary,
                 "ended_at": utcnow(),
             }
         )
@@ -864,6 +957,11 @@ def start_run(
 
 
 def start_contest(cfg: dict, project: dict, spec: dict, user_text: str) -> tuple[dict, list[dict]]:
+    for existing in list_contests(project["id"]):
+        if existing.get("status") in ("competing", "reviewing"):
+            raise ValueError(
+                f"contest {existing.get('id')} is still {existing.get('status')} — wait or veto it first"
+            )
     cid = uuid.uuid4().hex[:8]
     goal = str(spec.get("goal") or user_text).strip() or user_text
     impl = []
@@ -962,11 +1060,13 @@ def advance_contest(cfg: dict, project: dict, cid: str) -> None:
                 {
                     "ts": utcnow(),
                     "role": "system",
-                    "text": f"Contest {cid} is awaiting desk verdict.",
+                    "text": (
+                        f"Contest {cid} is awaiting an operator verdict. "
+                        "It will not approve or apply itself."
+                    ),
                     "run_ids": contest.get("review_run_ids") or [],
                 },
             )
-            ask_desk_verdict(cfg, project, contest)
 
 
 def start_review(cfg: dict, project: dict, contest: dict) -> None:
@@ -982,7 +1082,8 @@ def start_review(cfg: dict, project: dict, contest: dict) -> None:
             f"\n## candidate {rid} worker={card.get('worker')} status={card.get('status')} dir={card.get('dir')}"
         )
         parts.append(f"summary: {card.get('summary')}")
-        parts.append(git_snapshot(card.get("dir") or project["dir"]))
+        parts.append(f"Read the tree on disk at {card.get('dir')}. Stat only:")
+        parts.append(git_snapshot(card.get("dir") or project["dir"], limit=1800))
     card = start_run(
         cfg,
         project,
@@ -1045,6 +1146,194 @@ def apply_verdict(project: dict, verdict: dict, source: str = "desk") -> str:
     return note
 
 
+def git_run(directory: str, args: list[str], timeout: int = 60) -> tuple[int, str, str]:
+    try:
+        proc = subprocess.run(
+            ["git", "-C", directory, *args],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=timeout,
+        )
+    except Exception as exc:
+        return 1, "", str(exc)
+    return proc.returncode, (proc.stdout or "").strip(), (proc.stderr or "").strip()
+
+
+def git_head(directory: str) -> str | None:
+    code, out, _ = git_run(directory, ["rev-parse", "HEAD"])
+    return out or None if code == 0 else None
+
+
+def apply_winner(project: dict, contest: dict) -> tuple[str, dict]:
+    if contest.get("status") != "approved":
+        raise ValueError("approve a winner before applying")
+    if contest.get("applied"):
+        raise ValueError("winner is already applied — revert first")
+    if dir_busy(project["dir"]):
+        raise ValueError("a worker is still writing the project dir")
+    winner_id = contest.get("winner_run_id")
+    win = load_run(project["id"], winner_id) if winner_id else None
+    if not win:
+        raise ValueError("winner run is missing")
+    proj_dir = project["dir"]
+    win_dir = win.get("dir") or ""
+    if not win_dir:
+        raise ValueError("winner has no worktree")
+    if norm_dir(win_dir) == norm_dir(proj_dir):
+        contest["applied"] = True
+        contest["apply"] = {"noop": True, "applied_at": utcnow()}
+        contest["updated_at"] = utcnow()
+        save_contest(project["id"], contest)
+        return "Winner already lives on the project dir; nothing to copy.", contest
+    if not is_git_repo(proj_dir) or not is_git_repo(win_dir):
+        raise ValueError("apply needs git on the project and the winner tree")
+
+    pre_head = git_head(proj_dir)
+    if not pre_head:
+        raise ValueError("could not read project HEAD")
+    stash_ref = None
+    if git_has_changes(proj_dir):
+        code, out, err = git_run(
+            proj_dir, ["stash", "push", "-u", "-m", f"sb-pre-apply-{contest['id']}"]
+        )
+        if code != 0:
+            raise ValueError(f"could not stash live tree: {err or out}")
+        code, out, err = git_run(proj_dir, ["rev-parse", "refs/stash"])
+        stash_ref = out if code == 0 else None
+
+    branch = f"sb/{win.get('worker')}-{win['id']}"
+    if git_has_changes(win_dir):
+        git_run(win_dir, ["add", "-A"])
+        code, out, err = git_run(
+            win_dir,
+            [
+                "-c",
+                "user.name=Switchboard",
+                "-c",
+                "user.email=switchboard@local",
+                "commit",
+                "-m",
+                f"contest {contest['id']} winner {win['id']}",
+            ],
+        )
+        if code != 0 and "nothing to commit" not in f"{out}\n{err}".lower():
+            if stash_ref:
+                git_run(proj_dir, ["stash", "pop"])
+            raise ValueError(f"could not commit winner tree: {err or out}")
+
+    code, out, err = git_run(proj_dir, ["merge", "--no-ff", "--no-edit", branch])
+    if code != 0:
+        git_run(proj_dir, ["merge", "--abort"])
+        if stash_ref:
+            git_run(proj_dir, ["stash", "pop"])
+        raise ValueError(f"merge conflict applying {branch}: {err or out}")
+
+    stash_restored = False
+    stash_note = ""
+    if stash_ref:
+        code, out, err = git_run(proj_dir, ["stash", "pop"])
+        stash_restored = code == 0
+        if not stash_restored:
+            stash_note = (
+                f" Uncommitted work is still stashed (sb-pre-apply-{contest['id']}); "
+                "run git stash pop in the project dir."
+            )
+
+    code, names, _ = git_run(proj_dir, ["diff", "--name-only", pre_head, "HEAD"])
+    changed = [n for n in (names or "").splitlines() if n]
+    contest["applied"] = True
+    contest["apply"] = {
+        "pre_head": pre_head,
+        "stash_ref": stash_ref,
+        "stash_restored": stash_restored,
+        "winner_commit": git_head(win_dir),
+        "branch": branch,
+        "changed": changed,
+        "applied_at": utcnow(),
+    }
+    contest["updated_at"] = utcnow()
+    save_contest(project["id"], contest)
+    note = f"Applied {win.get('worker')} {win['id']} onto the project dir ({len(changed)} files)."
+    if stash_ref and stash_restored:
+        note += " Restored your uncommitted work on top of the merge."
+    note += stash_note
+    if any(n in ("server.py", "serve.ps1", "serve.cmd") for n in changed):
+        note += " Restart Switchboard so the running process matches disk."
+    if norm_dir(proj_dir) == norm_dir(str(ROOT)):
+        broken = ui_is_broken()
+        if broken:
+            revert_apply(project, contest)
+            raise ValueError(f"apply rolled back — {broken}")
+    return note, contest
+
+
+def ui_is_broken() -> str | None:
+    path = ROOT / "ui" / "index.html"
+    if not path.exists():
+        return "ui/index.html missing"
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError as exc:
+        return str(exc)
+    if "<<<<<<<" in text or ">>>>>>>" in text:
+        return "merge conflict markers in ui/index.html"
+    if "<script>" not in text or "</script>" not in text:
+        return "ui/index.html is missing its script"
+    return None
+
+
+def apply_preview(project: dict, contest: dict) -> dict:
+    win = load_run(project["id"], contest.get("winner_run_id") or "") if contest.get("winner_run_id") else None
+    branch = f"sb/{(win or {}).get('worker')}-{(win or {}).get('id')}" if win else ""
+    dirty = git_has_changes(project["dir"])
+    behind = 0
+    if win and is_git_repo(project["dir"]) and branch:
+        code, out, _ = git_run(project["dir"], ["rev-list", "--count", f"{branch}..HEAD"])
+        if code == 0 and out.isdigit():
+            behind = int(out)
+    return {
+        "contest_id": contest.get("id"),
+        "winner_run_id": contest.get("winner_run_id"),
+        "branch": branch,
+        "dirty": dirty,
+        "commits_ahead_of_winner": behind,
+        "applied": bool(contest.get("applied")),
+        "self_host": norm_dir(project["dir"]) == norm_dir(str(ROOT)),
+    }
+
+
+def revert_apply(project: dict, contest: dict) -> tuple[str, dict]:
+    info = contest.get("apply") or {}
+    if not contest.get("applied"):
+        raise ValueError("nothing applied to revert")
+    if dir_busy(project["dir"]):
+        raise ValueError("a worker is still writing the project dir")
+    if info.get("noop"):
+        contest["applied"] = False
+        contest["reverted_at"] = utcnow()
+        contest["updated_at"] = utcnow()
+        save_contest(project["id"], contest)
+        return "Cleared no-op apply.", contest
+    pre = info.get("pre_head")
+    if not pre:
+        raise ValueError("missing pre-apply HEAD")
+    code, out, err = git_run(project["dir"], ["reset", "--hard", pre])
+    if code != 0:
+        raise ValueError(f"reset failed: {err or out}")
+    stash_ref = info.get("stash_ref")
+    if stash_ref:
+        code, out, err = git_run(project["dir"], ["stash", "apply", stash_ref])
+        if code != 0:
+            raise ValueError(f"reset to {pre[:8]} but could not restore stash: {err or out}")
+    contest["applied"] = False
+    contest["reverted_at"] = utcnow()
+    contest["updated_at"] = utcnow()
+    save_contest(project["id"], contest)
+    return f"Reverted contest {contest['id']} to {pre[:8]}.", contest
+
+
 def ask_desk_verdict(cfg: dict, project: dict, contest: dict) -> None:
     reviews = []
     for rid in contest.get("review_run_ids") or []:
@@ -1101,6 +1390,16 @@ class Handler(SimpleHTTPRequestHandler):
             return {}
         return json.loads(self.rfile.read(n).decode("utf-8"))
 
+    def _authorized(self) -> bool:
+        token = configured_token()
+        if not token:
+            return True
+        got = (self.headers.get("X-Switchboard-Token") or "").strip()
+        auth = (self.headers.get("Authorization") or "").strip()
+        if auth.lower().startswith("bearer "):
+            got = auth[7:].strip()
+        return got == token
+
     def do_GET(self):
         try:
             parsed = urlparse(self.path)
@@ -1119,6 +1418,8 @@ class Handler(SimpleHTTPRequestHandler):
 
     def do_POST(self):
         try:
+            if not self._authorized():
+                return self._send(401, {"error": "token required"})
             parsed = urlparse(self.path)
             path = parsed.path.rstrip("/")
             if path.startswith("/api/"):
@@ -1146,10 +1447,22 @@ class Handler(SimpleHTTPRequestHandler):
                     "host": cfg.get("host") or "127.0.0.1",
                     "port": int(cfg.get("port") or 8787),
                     "pid": os.getpid(),
+                    "code_stale": _code_is_stale(),
+                    "token_required": bool(configured_token()),
+                    "bind": f"{cfg.get('host') or '127.0.0.1'}:{int(cfg.get('port') or 8787)}",
                 },
             )
         if path == "/api/workers":
             return self._send(200, {"workers": list(WORKERS)})
+        if path == "/api/fs":
+            target = (parse_qs(urlparse(self.path).query).get("path") or [""])[0]
+            try:
+                return self._send(200, list_directory(target))
+            except ValueError as exc:
+                return self._send(400, {"error": str(exc)})
+            except Exception as exc:
+                server_log(f"fs list failed: {exc}")
+                return self._send(500, {"error": str(exc)})
         if path == "/api/projects":
             return self._send(200, {"projects": list_projects()})
         m = re.fullmatch(r"/api/projects/([^/]+)", path)
@@ -1181,6 +1494,15 @@ class Handler(SimpleHTTPRequestHandler):
             if not load_project(m.group(1)):
                 return self._send(404, {"error": "no project"})
             return self._send(200, {"scores": load_scores(m.group(1)), "ranked": rank_workers(m.group(1))})
+        m = re.fullmatch(r"/api/projects/([^/]+)/contests/([^/]+)/apply-preview", path)
+        if m:
+            if not load_project(m.group(1)):
+                return self._send(404, {"error": "no project"})
+            contest = load_contest(m.group(1), m.group(2))
+            if not contest:
+                return self._send(404, {"error": "no contest"})
+            proj = load_project(m.group(1))
+            return self._send(200, apply_preview(proj, contest))
         m = re.fullmatch(r"/api/runs/([^/]+)", path)
         if m:
             found = find_run(m.group(1))
@@ -1265,7 +1587,11 @@ class Handler(SimpleHTTPRequestHandler):
             for verdict in verdicts:
                 notes.append(apply_verdict(proj, verdict, "desk"))
             for spec in contests:
-                contest, cards = start_contest(cfg, proj, spec, text)
+                try:
+                    contest, cards = start_contest(cfg, proj, spec, text)
+                except ValueError as exc:
+                    notes.append(str(exc))
+                    continue
                 contest_ids.append(contest["id"])
                 run_ids.extend(c["id"] for c in cards)
                 names = ", ".join(contest.get("implementers") or [])
@@ -1304,10 +1630,32 @@ class Handler(SimpleHTTPRequestHandler):
                 {"ts": utcnow(), "role": "system", "text": note},
             )
             return self._send(200, {"reply": note, "contest": load_contest(proj["id"], m.group(2))})
+        m = re.fullmatch(r"/api/projects/([^/]+)/contests/([^/]+)/(apply|revert)", path)
+        if m:
+            proj = load_project(m.group(1))
+            if not proj:
+                return self._send(404, {"error": "no project"})
+            contest = load_contest(proj["id"], m.group(2))
+            if not contest:
+                return self._send(404, {"error": "no contest"})
+            try:
+                if m.group(3) == "apply":
+                    note, contest = apply_winner(proj, contest)
+                else:
+                    note, contest = revert_apply(proj, contest)
+            except ValueError as exc:
+                return self._send(409, {"error": str(exc)})
+            append_jsonl(
+                project_dir(proj["id"]) / "thread.jsonl",
+                {"ts": utcnow(), "role": "system", "text": note, "run_ids": [contest.get("winner_run_id")] if contest.get("winner_run_id") else []},
+            )
+            return self._send(200, {"reply": note, "contest": contest})
         self._send(404, {"error": "not found"})
 
     def do_PATCH(self):
         try:
+            if not self._authorized():
+                return self._send(401, {"error": "token required"})
             parsed = urlparse(self.path)
             path = parsed.path.rstrip("/")
             if not path.startswith("/api/"):
@@ -1337,6 +1685,8 @@ class Handler(SimpleHTTPRequestHandler):
 
     def do_DELETE(self):
         try:
+            if not self._authorized():
+                return self._send(401, {"error": "token required"})
             parsed = urlparse(self.path)
             path = parsed.path.rstrip("/")
             if not path.startswith("/api/"):
@@ -1350,8 +1700,30 @@ class Handler(SimpleHTTPRequestHandler):
             # malformed request from resolving outside the projects store.
             if not proj or proj.get("id") != pid:
                 return self._send(404, {"error": "no project"})
+            store = project_dir(pid)
+            meta = store / "project.json"
+            # Drop the record first so the UI list updates even if rmtree
+            # cannot delete locked worktrees on Windows.
+            if meta.exists():
+                meta.unlink()
+            wts = store / "worktrees"
+            if wts.exists() and is_git_repo(proj.get("dir") or ""):
+                for child in list(wts.iterdir()):
+                    if child.is_dir():
+                        subprocess.run(
+                            ["git", "-C", proj["dir"], "worktree", "remove", "--force", str(child)],
+                            capture_output=True,
+                            text=True,
+                            timeout=30,
+                        )
+            def _onerror(func, name, exc_info):
+                try:
+                    os.chmod(name, 0o700)
+                    func(name)
+                except Exception:
+                    pass
             with _lock:
-                shutil.rmtree(project_dir(pid))
+                shutil.rmtree(store, onerror=_onerror)
             return self._send(200, {"removed": pid})
         except Exception as exc:
             sys.stderr.write("DELETE %s failed: %s\n" % (self.path, exc))
@@ -1379,6 +1751,58 @@ def recover_orphans() -> None:
             server_log(f"recovered orphan {pid}/{rid}")
 
 
+def reclassify_mixed_runs() -> None:
+    """Exit 1 + a dirty worktree is mixed success (AGY often does this)."""
+    for proj in list_projects():
+        pid = proj.get("id")
+        if not pid:
+            continue
+        for card in list_runs(pid):
+            if card.get("status") != "error":
+                continue
+            directory = card.get("dir") or ""
+            if not git_has_changes(directory):
+                continue
+            rid = card.get("id")
+            card["status"] = "done"
+            card["outcome"] = "wrote_files"
+            card["exit_code"] = card.get("exit_code", 1)
+            if not card.get("summary") or card.get("summary") in ("no output", "error"):
+                card["summary"] = "wrote files (exit 1)"
+            write_json(project_dir(pid) / "runs" / rid / "run.json", card)
+            server_log(f"reclassified {pid}/{rid} as wrote_files")
+
+
+def _pid_alive(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    if os.name == "nt":
+        import ctypes
+        PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+        handle = ctypes.windll.kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, int(pid))
+        if handle:
+            ctypes.windll.kernel32.CloseHandle(handle)
+            return True
+        return False
+    try:
+        os.kill(pid, 0)
+        return True
+    except OSError:
+        return False
+
+
+def acquire_instance_lock() -> Path:
+    path = DATA_DIR / "server.pid"
+    if path.exists():
+        try:
+            old = int(path.read_text(encoding="utf-8").strip())
+        except ValueError:
+            old = 0
+        if old and old != os.getpid() and _pid_alive(old):
+            raise SystemExit(f"Switchboard already running as pid {old}")
+    return path
+
+
 def main() -> None:
     refresh_path()
     if "worktrees" in ROOT.parts:
@@ -1388,9 +1812,20 @@ def main() -> None:
         )
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     recover_orphans()
+    reclassify_mixed_runs()
     cfg = load_config()
     host = cfg.get("host") or "127.0.0.1"
+    if host not in ("127.0.0.1", "localhost", "::1"):
+        server_log(f"warning: binding {host} — prefer 127.0.0.1 until auth is required")
     port = int(cfg.get("port") or 8787)
+    acquire_instance_lock()
+    import socket
+    probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        if probe.connect_ex((host, port)) == 0:
+            raise SystemExit(f"already listening on {host}:{port}")
+    finally:
+        probe.close()
     # HTTPServer defaults allow_reuse_address=1; on Windows that lets a
     # second process bind 8787 and browsers get empty replies.
     ThreadingHTTPServer.allow_reuse_address = False

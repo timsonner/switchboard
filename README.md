@@ -41,13 +41,18 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\start-detached.ps1
 # open http://127.0.0.1:8787  (not localhost)
 ```
 
-Do **not** auto-start at logon yet. `install-startup.ps1` is kept for a later
-production build once bind/auth are locked down.
+Do **not** auto-start at logon yet. `install-startup.ps1` is kept for later.
+
+Keep the bind on `127.0.0.1`. Optional write-token: set `token` in `config.json`
+or `SWITCHBOARD_TOKEN`. Mutating API calls then need `X-Switchboard-Token`.
+A second `server.py` is refused (pid lock). After **Apply**, uncommitted work
+is restored on top of the merge; a broken `ui/index.html` rolls the apply back.
 
 Add a project directory, talk to **Grok (desk)** or pick a worker and Send.
 Desk opens a **contest** for real work: two implementers on git worktrees, a
 third worker reviews both, then the desk approves one tree or vetoes. Scores
-steer the next lineup. You can override the verdict in the UI.
+steer the next lineup. You can override the verdict in the UI. **Apply
+winner** merges that tree onto the project; **Revert apply** rolls back.
 Worker runs are cards; open a card to read the transcript (that text is **not**
 injected into Grok). **Reply on this run** resumes the same worker session as a
 new card. `data/` is local and gitignored.
@@ -55,7 +60,7 @@ new card. `data/` is local and gitignored.
 Optional `config.json` in this repo root (see [config.example.json](config.example.json)):
 
 ```json
-{ "agent_skills": "../agent-skills", "host": "127.0.0.1", "port": 8787 }
+{ "agent_skills": "../agent-skills", "host": "127.0.0.1", "port": 8787, "token": "" }
 ```
 
 ## Layout on disk

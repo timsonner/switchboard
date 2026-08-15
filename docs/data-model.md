@@ -25,7 +25,7 @@ data/
 |---|---|
 | `id` | Stable slug |
 | `dir` | Workspace path (the harness `-Dir`) |
-| `brief` | Short project brief (the only long-ish text always eligible for Grok) |
+| `brief` | Optional standing note for the **desk** (Grok), not a user-facing README |
 | `created_at` | ISO-8601 |
 
 One project ↔ one `dir`. Do not point two projects at the same tree if both
@@ -42,8 +42,8 @@ JSONL, one object per event, **you ↔ Grok only**.
 | `text` | Steering text |
 | `run_ids` | Optional runs this turn started or referenced |
 
-Grok’s live context = `project.brief` + last N thread events + the **run
-index** (cards), not `transcript.md`.
+Grok’s live context = `project.brief` (desk note) + last N thread events +
+the **run index**. Not `transcript.md`. Not the README unless a worker opens it.
 
 ## run (card)
 
@@ -84,6 +84,15 @@ Desk (Grok) approves one winner or vetoes. The human can override.
 | `reviewer` | Worker that critiques (must not be an implementer if possible) |
 | `winner_run_id` | Set on approve |
 | `reason` | Desk / operator rationale |
+| `applied` | Winner tree has been merged onto `project.dir` |
+| `apply` | Snapshot used to revert (`pre_head`, optional `stash_ref`) |
+
+Approve does **not** change the project tree. **Apply winner** merges the
+winning worktree branch (`sb/<worker>-<run>`) into `project.dir` (not a
+rebase). Live dirty files are stashed, then **popped back on top** of the
+merge so in-progress UI/server work is not silently lost. **Revert apply**
+hard-resets to `pre_head` and restores that stash. If `server.py` changed,
+restart the process — disk and the running API otherwise diverge.
 
 One writer per **directory**. Contest implementers use worktrees so they
 can run at the same time. No worktree (not a git repo) → single implementer.

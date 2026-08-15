@@ -25,7 +25,7 @@
       background: var(--bg);
       color: var(--text);
       display: grid;
-      grid-template-rows: auto auto minmax(0, 1fr);
+      grid-template-rows: auto auto auto minmax(0, 1fr);
     }
     header {
       display: flex;
@@ -36,6 +36,15 @@
       background: var(--panel);
     }
     header strong { color: var(--accent); font-weight: 650; letter-spacing: 0.02em; }
+    .banner {
+      display: none;
+      padding: 0.4rem 1rem;
+      background: #3d3420;
+      color: var(--accent);
+      font-size: 0.82rem;
+      border-bottom: 1px solid var(--line);
+    }
+    .banner.show { display: block; }
     .counts { color: var(--muted); font-size: 0.8rem; }
     .counts b { color: var(--text); font-weight: 600; }
     main {
@@ -74,6 +83,7 @@
     .status-error { color: var(--bad); }
     .status-running { color: var(--run); }
     .status-queued { color: var(--accent); }
+    .status-mixed { color: var(--accent); }
     .card.running { border-color: #3a5274; }
     .card.queued { opacity: 0.85; }
     .pulse { display: inline-block; width: 0.45rem; height: 0.45rem; border-radius: 50%; background: var(--run); margin-right: 0.35rem; animation: pulse 1.2s infinite; }
@@ -173,6 +183,36 @@
       overflow: auto;
       background: #0f131a;
     }
+    .picker-flyout {
+      width: min(36rem, 92vw);
+      height: min(32rem, 86vh);
+      margin: auto;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      display: grid;
+      grid-template-rows: auto auto 1fr auto;
+      overflow: hidden;
+    }
+    .picker-path {
+      padding: 0.35rem 1rem;
+      border-bottom: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 0.8rem;
+      word-break: break-all;
+    }
+    .picker-list { overflow: auto; padding: 0.35rem; }
+    .picker-item {
+      display: block;
+      width: 100%;
+      text-align: left;
+      background: transparent;
+      border: 0;
+      border-radius: 6px;
+      padding: 0.4rem 0.55rem;
+      color: var(--text);
+    }
+    .picker-item:hover { background: #222836; }
     .diff-view {
       font-family: ui-monospace, monospace;
       font-size: 0.8rem;
@@ -240,6 +280,10 @@
     <span class="counts" id="counts">loading…</span>
     <span id="health" class="ghost" style="margin-left:auto"></span>
   </header>
+  <div id="staleBanner" class="banner">
+    Files on disk are newer than this server process. Restart Switchboard
+    (<code>.\start-detached.ps1</code>) or the UI and API will disagree.
+  </div>
   <div class="composer">
     <textarea id="box" placeholder="Steer the desk — it will run a contest (two implementers + a reviewer). Or pick one worker. Ctrl+Enter sends."></textarea>
     <div class="row">
@@ -264,14 +308,17 @@
       <div id="projects"></div>
       <div class="form">
         <h2>New</h2>
-        <div class="row"><input id="newDir" type="text" placeholder="C:\path\to\project" /></div>
-        <div class="row"><input id="newBrief" type="text" placeholder="brief (optional)" /></div>
+        <div class="row">
+          <input id="newDir" type="text" placeholder="project directory" />
+          <button type="button" class="small" id="pickProjectDir">Browse…</button>
+        </div>
         <button type="button" id="addProject">Add project</button>
       </div>
       <div class="form" id="briefBox" hidden>
-        <h2>Brief</h2>
-        <div class="row"><input id="briefEdit" type="text" placeholder="what this project is" /></div>
-        <button type="button" class="small" id="saveBrief">Save brief</button>
+        <h2>For Grok (desk)</h2>
+        <p class="ghost" style="margin:0 0 0.4rem;font-size:0.75rem">Standing note in every desk turn. Not shown as a project description — workers can still read the README.</p>
+        <div class="row"><input id="briefEdit" type="text" placeholder="one line Grok should always know" /></div>
+        <button type="button" class="small" id="saveBrief">Save desk note</button>
       </div>
     </aside>
     <section class="desk">
@@ -298,6 +345,23 @@
       </div>
       <div id="diffFlyoutBody" class="diff-flyout-body">
         <div class="ghost">Pick a run to review its patch.</div>
+      </div>
+    </div>
+  </div>
+  <div id="dirPicker" class="diff-flyout-backdrop" hidden>
+    <div class="picker-flyout" role="dialog" aria-modal="true" aria-labelledby="dirPickerTitle">
+      <div class="diff-flyout-header">
+        <div>
+          <h3 id="dirPickerTitle">Choose a project folder</h3>
+          <div class="ghost">Click a folder to open it. Use this folder when you are on the repo root.</div>
+        </div>
+        <button type="button" id="closeDirPicker">Close</button>
+      </div>
+      <div id="dirPickerPath" class="picker-path"></div>
+      <div id="dirPickerList" class="picker-list"></div>
+      <div class="row" style="padding:0.55rem 0.75rem;border-top:1px solid var(--line)">
+        <button type="button" class="small" id="dirPickerUp">Up</button>
+        <button type="button" class="primary" id="dirPickerUse">Use this folder</button>
       </div>
     </div>
   </div>
@@ -336,8 +400,24 @@
       return Math.floor(s / 60) + "m " + (s % 60) + "s";
     }
 
+    function authHeaders(extra) {
+      const headers = Object.assign({}, extra || {});
+      const token = sessionStorage.getItem("sb-token") || "";
+      if (token) headers["X-Switchboard-Token"] = token;
+      return headers;
+    }
+
     async function api(path, opts) {
-      const r = await fetch(path, opts);
+      opts = opts || {};
+      opts.headers = authHeaders(opts.headers);
+      let r = await fetch(path, opts);
+      if (r.status === 401) {
+        const token = window.prompt("Switchboard token");
+        if (!token) throw new Error("token required");
+        sessionStorage.setItem("sb-token", token);
+        opts.headers = authHeaders(opts.headers);
+        r = await fetch(path, opts);
+      }
       const ct = r.headers.get("content-type") || "";
       const body = ct.includes("application/json") ? await r.json() : await r.text();
       if (!r.ok) throw new Error((body && body.error) || r.statusText);
@@ -373,6 +453,8 @@
           + " · " + (h.grok ? "grok" : "no grok")
           + " · pid " + (h.pid || "?");
         $("health").className = h.dispatcher_exists ? "ghost" : "err";
+        const banner = $("staleBanner");
+        if (banner) banner.classList.toggle("show", !!h.code_stale);
       } catch (e) {
         $("health").textContent = String(e);
         $("health").className = "err";
@@ -417,7 +499,9 @@
         remove.textContent = "Remove";
         remove.title = `Remove ${p.id} from Switchboard`;
         remove.onclick = (event) => {
+          event.preventDefault();
           event.stopPropagation();
+          event.stopImmediatePropagation();
           removeProject(p);
         };
         el.classList.add("project-item");
@@ -425,9 +509,9 @@
         el.onclick = () => { current = p.id; localStorage.setItem("sb-project", current); setReply({}); render(); };
         box.appendChild(el);
       }
-      const proj = projects.find((p) => p.id === current);
-      $("briefBox").hidden = !proj;
-      if (proj) $("briefEdit").value = proj.brief || "";
+      const selected = projects.find((p) => p.id === current);
+      $("briefBox").hidden = !selected;
+      if (selected) $("briefEdit").value = selected.brief || "";
     }
 
     async function render() {
@@ -472,8 +556,10 @@
         const el = document.createElement("div");
         el.className = "card";
         const awaiting = c.status === "awaiting_desk";
+        const approved = c.status === "approved";
         const impl = (c.implementer_run_ids || []).join(", ");
-        el.innerHTML = `<span class="status-${escapeHtml(c.status === "approved" ? "done" : c.status === "vetoed" || c.status === "error" ? "error" : "running")}">${escapeHtml(c.status)}</span>
+        const applied = !!c.applied;
+        el.innerHTML = `<span class="status-${escapeHtml(c.status === "approved" ? "done" : c.status === "vetoed" || c.status === "error" ? "error" : "running")}">${escapeHtml(c.status)}${applied ? " · applied" : ""}</span>
           <small>${escapeHtml(c.id)} · ${escapeHtml((c.implementers || []).join(" vs "))} · review ${escapeHtml(c.reviewer || "")}</small>
           <div class="summary">${escapeHtml(c.goal || "")}</div>
           <small>runs ${escapeHtml(impl)}${c.winner_run_id ? " · winner " + c.winner_run_id : ""}</small>
@@ -481,10 +567,18 @@
             ${(c.implementer_run_ids || []).map((rid) => `<button type="button" class="small" data-approve="${rid}">approve ${rid}</button>`).join("")}
             <button type="button" class="small" data-veto>veto all</button>
           </div>` : ""}
+          ${approved ? `<div class="row">
+            <button type="button" class="small" data-apply ${applied ? "disabled" : ""}>apply winner</button>
+            <button type="button" class="small" data-revert ${applied ? "" : "disabled"}>revert apply</button>
+          </div>` : ""}
           ${c.reason ? `<small>${escapeHtml(c.reason)}</small>` : ""}`;
         el.querySelectorAll("[data-approve]").forEach((btn) => {
           btn.onclick = (e) => { e.stopPropagation(); sendVerdict(c.id, "approve", btn.getAttribute("data-approve")); };
         });
+        const applyBtn = el.querySelector("[data-apply]");
+        if (applyBtn) applyBtn.onclick = (e) => { e.stopPropagation(); applyContest(c.id); };
+        const revertBtn = el.querySelector("[data-revert]");
+        if (revertBtn) revertBtn.onclick = (e) => { e.stopPropagation(); revertContest(c.id); };
         const veto = el.querySelector("[data-veto]");
         if (veto) veto.onclick = (e) => { e.stopPropagation(); sendVerdict(c.id, "veto", ""); };
         contestsEl.appendChild(el);
@@ -506,7 +600,12 @@
         const pulse = r.status === "running" ? '<span class="pulse"></span>' : "";
         const role = r.role ? `<span class="role">${escapeHtml(r.role)}</span> · ` : "";
         const contestBit = r.contest_id ? ` · contest ${escapeHtml(r.contest_id)}` : "";
-        el.innerHTML = `<span class="status-${escapeHtml(r.status)}">${pulse}${role}${escapeHtml(r.worker)} · ${escapeHtml(r.status)}${wait ? " · " + wait : ""}</span>
+        const mixed = r.outcome === "wrote_files";
+        const statusCls = mixed ? "mixed" : escapeHtml(r.status);
+        const statusLabel = mixed
+          ? `wrote files · exit ${r.exit_code ?? "?"}`
+          : escapeHtml(r.status);
+        el.innerHTML = `<span class="status-${statusCls}">${pulse}${role}${escapeHtml(r.worker)} · ${statusLabel}${wait ? " · " + wait : ""}</span>
           <small>${fmtTime(r.started_at)} · ${escapeHtml(r.id)} · ${escapeHtml(sid)}${contestBit}</small>
           <div class="summary">${escapeHtml(r.summary || r.prompt || "")}</div>
           <div class="row">
@@ -634,6 +733,79 @@
       }[c]));
     }
 
+    let pickerPath = "";
+
+    async function loadPicker(path) {
+      const data = await api("/api/fs?path=" + encodeURIComponent(path || ""));
+      pickerPath = data.path || "";
+      $("dirPickerPath").textContent = pickerPath || "This PC";
+      $("dirPickerUp").disabled = data.parent === null || data.parent === undefined;
+      $("dirPickerUp").dataset.parent = data.parent === null || data.parent === undefined ? "" : data.parent;
+      $("dirPickerUse").disabled = !pickerPath;
+      const box = $("dirPickerList");
+      box.innerHTML = "";
+      if (!(data.dirs || []).length) {
+        box.innerHTML = '<p class="ghost">No subfolders.</p>';
+        return;
+      }
+      for (const d of data.dirs) {
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "picker-item";
+        btn.textContent = d.name;
+        btn.onclick = () => loadPicker(d.path).catch((e) => { $("hint").textContent = String(e); $("hint").className = "err"; });
+        box.appendChild(btn);
+      }
+    }
+
+    async function pickProjectDirectory() {
+      $("hint").textContent = "";
+      $("hint").className = "ghost";
+      $("dirPicker").hidden = false;
+      try {
+        await loadPicker(pickerPath || $("newDir").value || "");
+      } catch (e) {
+        $("hint").textContent = String(e);
+        $("hint").className = "err";
+      }
+    }
+
+    async function contestAction(contestId, action) {
+      if (!current) return;
+      if (action === "apply") {
+        let preview = {};
+        try { preview = await api(`/api/projects/${current}/contests/${contestId}/apply-preview`); }
+        catch (e) { /* still confirm */ }
+        const bits = [
+          "Merge the winning worktree onto this project?",
+          preview.branch ? "Branch: " + preview.branch : "",
+          preview.dirty ? "Your uncommitted files will be stashed, then put back on top of the merge." : "",
+          preview.commits_ahead_of_winner ? ("Current tree is " + preview.commits_ahead_of_winner + " commit(s) ahead of the winner — merge, not rebase.") : "",
+          preview.self_host ? "This project IS the running Switchboard. A bad merge can blank the UI; broken index.html will be rolled back." : "",
+          "This does not restart the server. If server.py changes, restart Switchboard after.",
+        ].filter(Boolean);
+        if (!window.confirm(bits.join("\n\n"))) return;
+      }
+      if (action === "revert" && !window.confirm("Reset the project dir to the snapshot from before this apply?")) return;
+      $("hint").textContent = action + "…";
+      $("hint").className = "ghost";
+      try {
+        const data = await api(`/api/projects/${current}/contests/${contestId}/${action}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: "{}",
+        });
+        $("hint").textContent = data.reply || action + " ok";
+        await refreshHealth();
+        await render();
+      } catch (e) {
+        $("hint").textContent = String(e);
+        $("hint").className = "err";
+      }
+    }
+    function applyContest(id) { return contestAction(id, "apply"); }
+    function revertContest(id) { return contestAction(id, "revert"); }
+
     async function sendVerdict(contestId, decision, winner) {
       if (!current) return;
       $("hint").textContent = "recording verdict…";
@@ -658,11 +830,17 @@
       $("hint").className = "ghost";
       try {
         await api(`/api/projects/${encodeURIComponent(project.id)}`, { method: "DELETE" });
+        projects = (projects || []).filter((p) => p.id !== project.id);
         if (current === project.id) {
-          current = null;
-          localStorage.removeItem("sb-project");
+          current = projects[0] ? projects[0].id : null;
+          if (current) localStorage.setItem("sb-project", current);
+          else localStorage.removeItem("sb-project");
           setReply({});
         }
+        const row = document.querySelectorAll("#projects .item");
+        row.forEach((el) => {
+          if ((el.textContent || "").startsWith(project.id)) el.remove();
+        });
         await render();
         $("hint").textContent = "project removed";
         $("hint").className = "ghost";
@@ -672,16 +850,31 @@
       }
     }
 
+    $("pickProjectDir").onclick = pickProjectDirectory;
+    $("closeDirPicker").onclick = () => { $("dirPicker").hidden = true; };
+    $("dirPicker").onclick = (e) => { if (e.target.id === "dirPicker") $("dirPicker").hidden = true; };
+    $("dirPickerUp").onclick = () => {
+      const parent = $("dirPickerUp").dataset.parent;
+      if (parent === undefined) return;
+      loadPicker(parent).catch((e) => { $("hint").textContent = String(e); $("hint").className = "err"; });
+    };
+    $("dirPickerUse").onclick = () => {
+      if (!pickerPath) return;
+      $("newDir").value = pickerPath;
+      $("dirPicker").hidden = true;
+      $("hint").textContent = "directory selected";
+      $("hint").className = "ghost";
+    };
+
     $("addProject").onclick = async () => {
       $("hint").textContent = "";
       try {
         const created = await api("/api/projects", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ dir: $("newDir").value, brief: $("newBrief").value }),
+          body: JSON.stringify({ dir: $("newDir").value }),
         });
         $("newDir").value = "";
-        $("newBrief").value = "";
         current = created.id;
         await render();
       } catch (e) { $("hint").textContent = String(e); $("hint").className = "err"; }
@@ -695,7 +888,7 @@
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ brief: $("briefEdit").value }),
         });
-        $("hint").textContent = "brief saved";
+        $("hint").textContent = "desk note saved";
         $("hint").className = "ghost";
         await render();
       } catch (e) { $("hint").textContent = String(e); $("hint").className = "err"; }
