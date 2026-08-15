@@ -35,11 +35,19 @@ Needs Python 3, `grok` on PATH (desk replies), and
 
 ```powershell
 cd C:\Users\tim\switchboard
-.\serve.ps1
-# open http://127.0.0.1:8787
+.\serve.cmd
+# or, from another process (survives a closing chat):
+powershell -NoProfile -ExecutionPolicy Bypass -File .\start-detached.ps1
+# open http://127.0.0.1:8787  (not localhost)
 ```
 
+Do **not** auto-start at logon yet. `install-startup.ps1` is kept for a later
+production build once bind/auth are locked down.
+
 Add a project directory, talk to **Grok (desk)** or pick a worker and Send.
+Desk opens a **contest** for real work: two implementers on git worktrees, a
+third worker reviews both, then the desk approves one tree or vetoes. Scores
+steer the next lineup. You can override the verdict in the UI.
 Worker runs are cards; open a card to read the transcript (that text is **not**
 injected into Grok). **Reply on this run** resumes the same worker session as a
 new card. `data/` is local and gitignored.

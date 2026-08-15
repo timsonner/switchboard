@@ -12,5 +12,9 @@ foreach ($c in @(
   if ($c -and (Test-Path $c)) { $py = $c; break }
 }
 if (-not $py) { throw "python not found" }
-Write-Host "Switchboard → http://127.0.0.1:8787  ($py)"
+$busy = Get-NetTCPConnection -LocalPort 8787 -State Listen -ErrorAction SilentlyContinue
+if ($busy) {
+  throw "port 8787 is already in use (PID $(($busy.OwningProcess | Select-Object -Unique) -join ', ')). Close that Switchboard window first."
+}
+Write-Host "Switchboard http://127.0.0.1:8787  ($py)"
 & $py (Join-Path $here "server.py")
