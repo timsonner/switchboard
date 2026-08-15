@@ -14,14 +14,20 @@ Workers today: `agy`, `opencode`, `copilot`, `codex`, `hermes` via
 
 ```text
 ┌────────────┬─────────────────────────────┬──────────────────┐
-│ projects   │  Grok (front desk)          │  run cards       │
-│ (dirs)     │  steering, pick worker,     │  worker · id ·   │
-│            │  “resume that Codex run”    │  status · 3-line │
+│ projects   │  Grok (front desk)          │  tabs:           │
+│ (dirs)     │  steering, pick worker,     │  Team · Contests │
+│            │  “resume that Codex run”    │  · Scoreboard    │
+│            │                             │  run cards       │
+│            │                             │  worker · id ·   │
+│            │                             │  status · 3-line │
 │            │                             │  summary         │
 │            │                             │  [open log]      │
 └────────────┴─────────────────────────────┴──────────────────┘
 ```
 
+- **Right rail** is tabbed: **Team** (run cards), **Contests** (verdicts,
+  apply/revert), and **Scoreboard** (wins / vetoes / done / error). Tab badges
+  flag running runs and contests awaiting your verdict; the header counts them too.
 - **Center** is the only conversation that lives in the model context.
 - **Cards** are jobs (`Invoke-HarnessOffload`). Click a card to read the
   full transcript in the UI — that does **not** get pasted back into Grok.
@@ -69,7 +75,7 @@ Optional `config.json` in this repo root (see [config.example.json](config.examp
 |---|---|
 | [docs/data-model.md](docs/data-model.md) | `project` / `thread` / `run` |
 | [server.py](server.py) | Local HTTP API + static UI |
-| [ui/index.html](ui/index.html) | Three panes |
+| [ui/index.html](ui/index.html) | Three panes (right rail tabbed) |
 | [prompts/desk.txt](prompts/desk.txt) | Grok front-desk instructions |
 | `data/` | Runtime transcripts + cards |
 

@@ -54,7 +54,59 @@
     }
     aside, section { min-height: 0; overflow: auto; }
     .rail { background: var(--panel); border-right: 1px solid var(--line); padding: 0.75rem; }
-    .team { background: var(--panel-2); border-left: 1px solid var(--line); padding: 0.75rem; }
+    .team {
+      background: var(--panel-2);
+      border-left: 1px solid var(--line);
+      padding: 0.75rem;
+      display: grid;
+      grid-template-rows: auto 1fr;
+      min-height: 0;
+      overflow: hidden;
+    }
+    .tabs { display: flex; gap: 0.3rem; margin-bottom: 0.6rem; }
+    .tab {
+      flex: 1 1 0;
+      min-width: 0;
+      border-radius: 7px;
+      padding: 0.3rem 0.35rem;
+      font-size: 0.78rem;
+      color: var(--muted);
+      text-align: center;
+      white-space: nowrap;
+      overflow: hidden;
+    }
+    .tab.active { color: var(--accent); border-color: var(--accent); background: #221c12; }
+    .badge {
+      display: inline-block;
+      min-width: 1rem;
+      height: 1rem;
+      line-height: 1rem;
+      padding: 0 0.3rem;
+      margin-left: 0.3rem;
+      border-radius: 999px;
+      background: var(--run);
+      color: #0e1014;
+      font-size: 0.66rem;
+      font-weight: 700;
+      text-align: center;
+    }
+    .badge.warn { background: var(--bad); color: #fff; }
+    .tab-panel { min-height: 0; overflow: auto; }
+    .score-row {
+      display: grid;
+      grid-template-columns: 5.5rem repeat(3, 1fr);
+      gap: 0.4rem;
+      align-items: center;
+      padding: 0.35rem 0.5rem;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      margin-bottom: 0.35rem;
+      background: #141821;
+      font-size: 0.78rem;
+    }
+    .score-name { font-weight: 600; }
+    .score-num { color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .score-num b { color: var(--text); }
     .desk { display: grid; grid-template-rows: auto 1fr; min-height: 0; }
     h2 {
       margin: 0 0 0.6rem;
@@ -330,12 +382,20 @@
       <div id="thread"></div>
     </section>
     <aside class="team">
-      <h2>Contests</h2>
-      <div id="contests"></div>
-      <h2>Scoreboard</h2>
-      <div id="scores" class="ghost"></div>
-      <h2>Team</h2>
-      <div id="runs"></div>
+      <div class="tabs" role="tablist" aria-label="right rail">
+        <button type="button" class="tab active" role="tab" data-tab="team" aria-selected="true">Team</button>
+        <button type="button" class="tab" role="tab" data-tab="contests" aria-selected="false">Contests</button>
+        <button type="button" class="tab" role="tab" data-tab="scores" aria-selected="false">Scoreboard</button>
+      </div>
+      <div class="tab-panel" data-panel="team" role="tabpanel">
+        <div id="runs"></div>
+      </div>
+      <div class="tab-panel" data-panel="contests" role="tabpanel" hidden>
+        <div id="contests"></div>
+      </div>
+      <div class="tab-panel" data-panel="scores" role="tabpanel" hidden>
+        <div id="scores" class="ghost"></div>
+      </div>
     </aside>
   </main>
   <div id="diffFlyout" class="diff-flyout-backdrop" hidden>
@@ -391,6 +451,9 @@
     let reply = { session_id: "", parent_run_id: "", worker: "" };
     let lastRuns = [];
     let lastContests = [];
+    const RIGHT_TABS = ["team", "contests", "scores"];
+    let rightTab = localStorage.getItem("sb-right-tab") || "team";
+    if (!RIGHT_TABS.includes(rightTab)) rightTab = "team";
     const openPanels = {};
     const diffCache = {};
     const transcriptCache = {};
@@ -464,6 +527,37 @@
       const hit = lastRuns.find((r) => r.worker === w && r.session_id);
       const already = reply.session_id && reply.worker === w;
       btn.hidden = !(w && hit && !already);
+    }
+
+    function switchRightTab(tab) {
+      if (!RIGHT_TABS.includes(tab)) tab = "team";
+      rightTab = tab;
+      localStorage.setItem("sb-right-tab", tab);
+      document.querySelectorAll(".tab").forEach((btn) => {
+        const active = btn.dataset.tab === tab;
+        btn.classList.toggle("active", active);
+        btn.setAttribute("aria-selected", active ? "true" : "false");
+      });
+      document.querySelectorAll(".tab-panel").forEach((panel) => {
+        panel.hidden = panel.dataset.panel !== tab;
+      });
+    }
+
+    function setTabBadge(tab, count, cls) {
+      const btn = document.querySelector(`.tab[data-tab="${tab}"]`);
+      if (!btn) return;
+      let badge = btn.querySelector(".badge");
+      if (count > 0) {
+        if (!badge) {
+          badge = document.createElement("span");
+          badge.className = "badge";
+          btn.appendChild(badge);
+        }
+        if (cls) badge.className = "badge " + cls;
+        badge.textContent = count > 99 ? "99+" : String(count);
+      } else if (badge) {
+        badge.remove();
+      }
     }
 
     async function refreshHealth() {
@@ -541,7 +635,12 @@
       if (!proj) {
         $("thread").innerHTML = '<p class="ghost">No project selected.</p>';
         $("runs").innerHTML = "";
+        $("contests").innerHTML = "";
+        $("scores").innerHTML = "";
         lastRuns = [];
+        lastContests = [];
+        setTabBadge("team", 0);
+        setTabBadge("contests", 0);
         $("counts").textContent = "desk + team";
         return;
       }
@@ -565,14 +664,25 @@
       const scoreBox = $("scores");
       const ranked = sc.ranked || [];
       const scores = sc.scores || {};
-      scoreBox.innerHTML = ranked.map((w) => {
-        const s = scores[w] || {};
-        return `${escapeHtml(w)} ${s.wins || 0}w/${s.vetoes || 0}v`;
-      }).join(" · ") || "no scores yet";
+      if (ranked.length) {
+        scoreBox.classList.remove("ghost");
+        scoreBox.innerHTML = ranked.map((w) => {
+          const s = scores[w] || {};
+          return `<div class="score-row">
+            <span class="score-name">${escapeHtml(w)}</span>
+            <span class="score-num">wins <b>${s.wins || 0}</b></span>
+            <span class="score-num">vetoes <b>${s.vetoes || 0}</b></span>
+            <span class="score-num">done <b>${s.done || 0}</b> · err <b>${s.error || 0}</b></span>
+          </div>`;
+        }).join("");
+      } else {
+        scoreBox.classList.add("ghost");
+        scoreBox.innerHTML = "no scores yet";
+      }
       const contestsEl = $("contests");
       contestsEl.innerHTML = "";
       if (!lastContests.length) contestsEl.innerHTML = '<p class="ghost">Desk opens a contest when you ask for work.</p>';
-      for (const c of lastContests.slice(0, 6)) {
+      for (const c of lastContests) {
         const el = document.createElement("div");
         el.className = "card";
         const awaiting = c.status === "awaiting_desk";
@@ -616,7 +726,11 @@
       const running = lastRuns.filter((r) => r.status === "running").length;
       const queued = lastRuns.filter((r) => r.status === "queued").length;
       const done = lastRuns.filter((r) => r.status === "done").length;
-      $("counts").innerHTML = `<b>${running}</b> running · <b>${queued}</b> queued · <b>${done}</b> done`;
+      const verdicts = lastContests.filter((c) => c.status === "awaiting_desk").length;
+      $("counts").innerHTML = `<b>${running}</b> running · <b>${queued}</b> queued · <b>${done}</b> done`
+        + (verdicts ? ` · <b class="status-error">${verdicts}</b> verdict${verdicts === 1 ? "" : "s"}` : "");
+      setTabBadge("team", running + queued);
+      setTabBadge("contests", verdicts, "warn");
       const runs = $("runs");
       runs.innerHTML = "";
       if (!lastRuns.length) runs.innerHTML = '<p class="ghost">No team yet. Desk can dispatch, or pick a worker.</p>';
@@ -964,6 +1078,9 @@
     };
 
     $("clearSession").onclick = () => setReply({});
+    document.querySelectorAll(".tab").forEach((btn) => {
+      btn.onclick = () => switchRightTab(btn.dataset.tab);
+    });
     $("closeDiffFlyout").onclick = closeDiffFlyout;
     $("diffFlyout").onclick = (e) => {
       if (e.target.id === "diffFlyout") closeDiffFlyout();
@@ -993,6 +1110,7 @@
       try {
         await refreshHealth();
         await loadWorkers();
+        switchRightTab(rightTab);
         await render();
       } catch (e) {
         $("hint").textContent = String(e);
