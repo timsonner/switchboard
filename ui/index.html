@@ -49,7 +49,7 @@
     .counts b { color: var(--text); font-weight: 600; }
     main {
       display: grid;
-      grid-template-columns: 15.5rem minmax(0, 1fr) 23rem;
+      grid-template-columns: 15.5rem minmax(0, 1fr) 26rem;
       min-height: 0;
     }
     aside, section { min-height: 0; overflow: auto; }
@@ -91,7 +91,49 @@
       text-align: center;
     }
     .badge.warn { background: var(--bad); color: #fff; }
-    .tab-panel { min-height: 0; overflow: auto; }
+    .tab-panel { min-height: 0; overflow: auto; height: 100%; }
+    .desk-panel {
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr);
+      overflow: hidden;
+    }
+    .desk-panel[hidden] { display: none !important; }
+    .stage {
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr);
+      min-height: 0;
+      overflow: hidden;
+      background: #0f131a;
+    }
+    .stage-bar {
+      display: flex;
+      align-items: center;
+      gap: 0.3rem;
+      padding: 0.45rem 0.7rem;
+      border-bottom: 1px solid var(--line);
+      background: var(--panel);
+    }
+    .stage-tab {
+      border-radius: 7px;
+      padding: 0.28rem 0.55rem;
+      font-size: 0.78rem;
+      color: var(--muted);
+    }
+    .stage-tab.active { color: var(--accent); border-color: var(--accent); background: #221c12; }
+    .stage-meta {
+      margin-left: auto;
+      color: var(--muted);
+      font-size: 0.75rem;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      min-width: 0;
+    }
+    .stage-body { min-height: 0; overflow: auto; padding: 0.75rem; }
+    .worktree-card small { word-break: break-all; }
+    .worktree-card .row { margin-top: 0.35rem; }
+    .worktree-card { cursor: pointer; }
+    .worktree-card.active { border-color: var(--accent); background: #221c12; }
     .score-header {
       padding: 0.2rem 0.2rem 0.6rem;
       margin-bottom: 0.5rem;
@@ -284,7 +326,7 @@
     }
     .score-sub .score-sub-ok { color: var(--ok); }
     .score-sub .score-sub-err { color: var(--bad); font-weight: 600; }
-    .desk { display: grid; grid-template-rows: auto 1fr; min-height: 0; }
+    .desk { min-height: 0; }
     h2 {
       margin: 0 0 0.6rem;
       font-size: 0.68rem;
@@ -557,10 +599,11 @@
     .chip button { padding: 0 0.15rem; border: 0; background: transparent; color: var(--muted); }
     .summary { margin: 0.25rem 0 0.2rem; }
     .role { color: var(--accent); font-size: 0.75rem; }
-    #thread { padding: 0 1rem 0.75rem; overflow: auto; }
+    #thread { padding: 0 0 0.75rem; overflow: auto; min-height: 0; }
     @media (max-width: 960px) {
       main { grid-template-columns: 1fr; }
-      .rail, .team { max-height: 14rem; }
+      .rail, .team { max-height: 16rem; }
+      .stage { min-height: 18rem; }
     }
   </style>
 </head>
@@ -611,17 +654,29 @@
         <button type="button" class="small" id="saveBrief">Save desk note</button>
       </div>
     </aside>
-    <section class="desk">
-      <div style="padding:0.75rem 1rem 0"><h2 id="threadTitle">Desk</h2></div>
-      <div id="thread"></div>
+    <section class="stage" aria-label="inspect">
+      <div class="stage-bar" role="tablist" aria-label="inspect pane">
+        <button type="button" class="stage-tab" role="tab" data-stage="diff" aria-selected="false">Diff</button>
+        <button type="button" class="stage-tab" role="tab" data-stage="transcript" aria-selected="false">Transcript</button>
+        <button type="button" class="stage-tab active" role="tab" data-stage="worktrees" aria-selected="true">Worktrees</button>
+        <span id="stageMeta" class="stage-meta"></span>
+      </div>
+      <div id="stageBody" class="stage-body">
+        <p class="ghost">Select a project. Diffs, transcripts, and contest worktrees show here.</p>
+      </div>
     </section>
     <aside class="team">
       <div class="tabs" role="tablist" aria-label="right rail">
-        <button type="button" class="tab active" role="tab" data-tab="team" aria-selected="true">Team</button>
+        <button type="button" class="tab active" role="tab" data-tab="desk" aria-selected="true">Desk</button>
+        <button type="button" class="tab" role="tab" data-tab="team" aria-selected="false">Team</button>
         <button type="button" class="tab" role="tab" data-tab="contests" aria-selected="false">Contests</button>
-        <button type="button" class="tab" role="tab" data-tab="scores" aria-selected="false">Scoreboard</button>
+        <button type="button" class="tab" role="tab" data-tab="scores" aria-selected="false">Scores</button>
       </div>
-      <div class="tab-panel" data-panel="team" role="tabpanel">
+      <div class="tab-panel desk-panel" data-panel="desk" role="tabpanel">
+        <h2 id="threadTitle">Desk</h2>
+        <div id="thread"></div>
+      </div>
+      <div class="tab-panel" data-panel="team" role="tabpanel" hidden>
         <div id="runs"></div>
       </div>
       <div class="tab-panel" data-panel="contests" role="tabpanel" hidden>
@@ -632,34 +687,6 @@
       </div>
     </aside>
   </main>
-  <div id="diffFlyout" class="diff-flyout-backdrop" hidden>
-    <div class="diff-flyout" role="dialog" aria-modal="true" aria-labelledby="diffFlyoutTitle">
-      <div class="diff-flyout-header">
-        <div>
-          <h3 id="diffFlyoutTitle">Diff review</h3>
-          <div id="diffFlyoutMeta" class="ghost flyout-meta"></div>
-        </div>
-        <button type="button" id="closeDiffFlyout">Close</button>
-      </div>
-      <div id="diffFlyoutBody" class="diff-flyout-body">
-        <div class="ghost">Pick a run to review its patch.</div>
-      </div>
-    </div>
-  </div>
-  <div id="transcriptFlyout" class="diff-flyout-backdrop" hidden>
-    <div class="diff-flyout" role="dialog" aria-modal="true" aria-labelledby="transcriptFlyoutTitle">
-      <div class="diff-flyout-header">
-        <div>
-          <h3 id="transcriptFlyoutTitle">Transcript</h3>
-          <div id="transcriptFlyoutMeta" class="ghost flyout-meta"></div>
-        </div>
-        <button type="button" id="closeTranscriptFlyout">Close</button>
-      </div>
-      <div id="transcriptFlyoutBody" class="diff-flyout-body">
-        <div class="ghost">Pick a run to review its full transcript.</div>
-      </div>
-    </div>
-  </div>
   <div id="dirPicker" class="diff-flyout-backdrop" hidden>
     <div class="picker-flyout" role="dialog" aria-modal="true" aria-labelledby="dirPickerTitle">
       <div class="diff-flyout-header">
@@ -685,19 +712,19 @@
     let reply = { session_id: "", parent_run_id: "", worker: "" };
     let lastRuns = [];
     let lastContests = [];
-    const RIGHT_TABS = ["team", "contests", "scores"];
-    let rightTab = localStorage.getItem("sb-right-tab") || "team";
-    if (!RIGHT_TABS.includes(rightTab)) rightTab = "team";
-    const openPanels = {};
+    const RIGHT_TABS = ["desk", "team", "contests", "scores"];
+    let rightTab = localStorage.getItem("sb-right-tab") || "desk";
+    if (!RIGHT_TABS.includes(rightTab)) rightTab = "desk";
+    const STAGE_TABS = ["diff", "transcript", "worktrees"];
+    let stageTab = "worktrees";
+    let stageRunId = null;
+    let lastWorktrees = [];
     const diffCache = {};
     const transcriptCache = {};
+    const diffInflight = {};
+    const transcriptInflight = {};
     let activeDiffId = null;
     let activeTranscriptId = null;
-
-    function panelState(id) {
-      if (!openPanels[id]) openPanels[id] = { diff: false, diffText: "" };
-      return openPanels[id];
-    }
 
     function fmtTime(ts) {
       if (!ts) return "";
@@ -775,6 +802,158 @@
       document.querySelectorAll(".tab-panel").forEach((panel) => {
         panel.hidden = panel.dataset.panel !== tab;
       });
+    }
+
+    function runLabel(run) {
+      if (!run) return "";
+      return [
+        run.worker || "run",
+        run.status || "",
+        run.role || "",
+        run.contest_id ? "contest " + run.contest_id : "",
+      ].filter(Boolean).join(" · ");
+    }
+
+    function switchStage(tab, runId) {
+      if (!STAGE_TABS.includes(tab)) tab = "worktrees";
+      stageTab = tab;
+      if (runId) stageRunId = String(runId);
+      document.querySelectorAll(".stage-tab").forEach((btn) => {
+        const active = btn.dataset.stage === tab;
+        btn.classList.toggle("active", active);
+        btn.setAttribute("aria-selected", active ? "true" : "false");
+      });
+      renderStage();
+    }
+
+    function ensureDiff(id) {
+      id = id ? String(id) : "";
+      if (!id) return;
+      if (Object.prototype.hasOwnProperty.call(diffCache, id)) return;
+      if (diffInflight[id]) return;
+      diffInflight[id] = api(`/api/runs/${id}/diff`)
+        .then((text) => { diffCache[id] = text || ""; })
+        .catch((e) => { delete diffCache[id]; throw e; })
+        .then(() => {
+          if (stageTab === "diff" && stageRunId === id) renderStage();
+        })
+        .catch((e) => {
+          if (stageTab === "diff" && stageRunId === id) {
+            $("stageBody").innerHTML = `<div class="err">${escapeHtml(String(e))}</div>`;
+          }
+        })
+        .finally(() => { delete diffInflight[id]; });
+    }
+
+    function ensureTranscript(id) {
+      id = id ? String(id) : "";
+      if (!id) return;
+      if (Object.prototype.hasOwnProperty.call(transcriptCache, id)) return;
+      if (transcriptInflight[id]) return;
+      transcriptInflight[id] = api(`/api/runs/${id}/transcript`)
+        .then((text) => { transcriptCache[id] = text || ""; })
+        .catch((e) => { delete transcriptCache[id]; throw e; })
+        .then(() => {
+          if (stageTab === "transcript" && stageRunId === id) renderStage();
+        })
+        .catch((e) => {
+          if (stageTab === "transcript" && stageRunId === id) {
+            $("stageBody").innerHTML = `<div class="err">${escapeHtml(String(e))}</div>`;
+          }
+        })
+        .finally(() => { delete transcriptInflight[id]; });
+    }
+
+    function renderDiffInto(body, run, text) {
+      body.innerHTML = "";
+      if (!text || !String(text).trim() || String(text).trim() === "(no file changes)") {
+        body.innerHTML = run && run.role === "review"
+          ? '<div class="ghost">No file changes on the candidate worktrees.</div>'
+          : '<div class="ghost">No file changes for this run.</div>';
+        return;
+      }
+      const view = document.createElement("div");
+      view.className = "diff-view";
+      for (const line of String(text).split(/\r?\n/)) {
+        const row = document.createElement("div");
+        const isAddition = line.startsWith("+") && !line.startsWith("+++");
+        const isRemoval = line.startsWith("-") && !line.startsWith("---");
+        const isHeader = line.startsWith("diff --git") || line.startsWith("index ") || line.startsWith("@@") || line.startsWith("--- ") || line.startsWith("+++ ");
+        const cls = isAddition ? "added" : isRemoval ? "removed" : isHeader ? "header" : "context";
+        row.className = `diff-line ${cls}`;
+        row.innerHTML = `<span class="diff-gutter">${isAddition ? "+" : isRemoval ? "-" : " "}</span><span class="diff-text">${escapeHtml(line)}</span>`;
+        view.appendChild(row);
+      }
+      body.appendChild(view);
+    }
+
+    function renderWorktreesInto(body) {
+      body.innerHTML = "";
+      if (!current) {
+        body.innerHTML = '<p class="ghost">Select a project to see contest worktrees.</p>';
+        return;
+      }
+      if (!lastWorktrees.length) {
+        body.innerHTML = '<p class="ghost">No contest worktrees yet. Desk opens isolated trees when a contest starts.</p>';
+        return;
+      }
+      for (const wt of lastWorktrees) {
+        const el = document.createElement("div");
+        const rid = wt.run_id ? String(wt.run_id) : "";
+        el.className = "card worktree-card" + (rid && rid === stageRunId ? " active" : "");
+        const dirty = wt.dirty ? '<span class="status-queued">dirty</span>' : '<span class="ghost">clean</span>';
+        el.innerHTML = `<span class="status-${escapeHtml(wt.status || "done")}">${escapeHtml(wt.worker || "?")} · ${escapeHtml(wt.status || "")}${wt.role ? " · " + escapeHtml(wt.role) : ""}</span>
+          <small>${escapeHtml(wt.branch || wt.name)} · ${escapeHtml(wt.head || "no HEAD")}${wt.contest_id ? " · contest " + escapeHtml(wt.contest_id) : ""}</small>
+          <small>${escapeHtml(wt.dir || "")}</small>
+          <div class="row">
+            <span>${dirty}</span>
+            ${rid ? '<button type="button" class="small" data-diff>diff</button><button type="button" class="small" data-transcript>transcript</button>' : ""}
+          </div>`;
+        el.onclick = () => { if (rid) stageRunId = rid; renderStage(); };
+        if (rid) {
+          el.querySelector("[data-diff]").onclick = (e) => { e.stopPropagation(); openDiff(rid); };
+          el.querySelector("[data-transcript]").onclick = (e) => { e.stopPropagation(); openTranscript(rid); };
+        }
+        body.appendChild(el);
+      }
+    }
+
+    function renderStage() {
+      const body = $("stageBody");
+      const meta = $("stageMeta");
+      const run = stageRunId ? lastRuns.find((r) => r.id === stageRunId) : null;
+      if (stageTab === "worktrees") {
+        meta.textContent = lastWorktrees.length ? lastWorktrees.length + " trees" : "";
+        renderWorktreesInto(body);
+        return;
+      }
+      if (!stageRunId) {
+        meta.textContent = "";
+        body.innerHTML = stageTab === "diff"
+          ? '<p class="ghost">Pick Diff on a Team card or worktree.</p>'
+          : '<p class="ghost">Pick Transcript on a Team card or worktree.</p>';
+        return;
+      }
+      meta.textContent = (run ? runLabel(run) : stageRunId);
+      if (stageTab === "transcript") {
+        if (Object.prototype.hasOwnProperty.call(transcriptCache, stageRunId)) {
+          body.innerHTML = "";
+          const view = document.createElement("pre");
+          view.className = "transcript-view";
+          view.textContent = transcriptCache[stageRunId] || "(no transcript yet)";
+          body.appendChild(view);
+          return;
+        }
+        body.innerHTML = '<div class="ghost">Loading transcript…</div>';
+        ensureTranscript(stageRunId);
+        return;
+      }
+      if (Object.prototype.hasOwnProperty.call(diffCache, stageRunId)) {
+        renderDiffInto(body, run, diffCache[stageRunId]);
+        return;
+      }
+      body.innerHTML = '<div class="ghost">Loading diff…</div>';
+      ensureDiff(stageRunId);
     }
 
     function closeProjectMenus() {
@@ -902,9 +1081,11 @@
         $("scores").innerHTML = "";
         lastRuns = [];
         lastContests = [];
+        lastWorktrees = [];
         setTabBadge("team", 0);
         setTabBadge("contests", 0);
         $("counts").textContent = "desk + team";
+        if (stageTab === "worktrees") renderStage();
         return;
       }
       const th = await api(`/api/projects/${proj.id}/thread`);
@@ -917,13 +1098,16 @@
         thread.appendChild(el);
       }
       thread.scrollTop = thread.scrollHeight;
-      const [rs, cs, sc] = await Promise.all([
+      const [rs, cs, sc, wt] = await Promise.all([
         api(`/api/projects/${proj.id}/runs`),
         api(`/api/projects/${proj.id}/contests`),
         api(`/api/projects/${proj.id}/scores`),
+        api(`/api/projects/${proj.id}/worktrees`),
       ]);
       lastRuns = rs.runs || [];
       lastContests = cs.contests || [];
+      lastWorktrees = wt.worktrees || [];
+      if (stageTab === "worktrees") renderStage();
       const scoreBox = $("scores");
       const ranked = sc.ranked || [];
       const scores = sc.scores || {};
@@ -1136,112 +1320,30 @@
       if (!busy && poll) { clearInterval(poll); poll = null; }
     }
 
-    function renderTranscriptFlyout(run, text) {
-      const body = $("transcriptFlyoutBody");
-      body.innerHTML = "";
-      $("transcriptFlyoutTitle").textContent = `Transcript · ${run.id}`;
-      $("transcriptFlyoutMeta").textContent = [
-        run.worker || "run",
-        run.status || "unknown",
-        run.role || "",
-        run.contest_id ? "contest " + run.contest_id : "",
-      ].filter(Boolean).join(" · ");
-      const view = document.createElement("pre");
-      view.className = "transcript-view";
-      view.textContent = text || "(no transcript yet)";
-      body.appendChild(view);
-    }
-
-    function closeTranscriptFlyout() {
-      $("transcriptFlyout").hidden = true;
-      activeTranscriptId = null;
-    }
-
-    async function openTranscript(id) {
-      const run = lastRuns.find((entry) => entry.id === id);
-      if (!run) return;
-      if (activeTranscriptId === id && !$("transcriptFlyout").hidden) {
-        closeTranscriptFlyout();
+    function openTranscript(id) {
+      id = id ? String(id) : "";
+      if (!id) return;
+      if (stageTab === "transcript" && stageRunId === id) {
+        switchStage("worktrees");
+        activeTranscriptId = null;
         return;
       }
-      $("transcriptFlyout").hidden = false;
       activeTranscriptId = id;
-      if (Object.prototype.hasOwnProperty.call(transcriptCache, id)) {
-        renderTranscriptFlyout(run, transcriptCache[id]);
-        return;
-      }
-      $("transcriptFlyoutBody").innerHTML = '<div class="ghost">Loading transcript…</div>';
-      try {
-        const text = await api(`/api/runs/${id}/transcript`);
-        transcriptCache[id] = text || "";
-        renderTranscriptFlyout(run, transcriptCache[id]);
-      } catch (e) {
-        $("transcriptFlyoutBody").innerHTML = `<div class="err">${escapeHtml(String(e))}</div>`;
-      }
-    }
-
-    function renderDiffFlyout(run, text) {
-      const body = $("diffFlyoutBody");
-      body.innerHTML = "";
-      $("diffFlyoutTitle").textContent = `Diff · ${run.id}`;
-      $("diffFlyoutMeta").textContent = [
-        run.worker || "run",
-        run.status || "unknown",
-        run.role || "",
-        run.contest_id ? "contest " + run.contest_id : "",
-      ].filter(Boolean).join(" · ");
-      if (!text || !String(text).trim() || String(text).trim() === "(no file changes)") {
-        body.innerHTML = run.role === "review"
-          ? '<div class="ghost">No file changes on the candidate worktrees.</div>'
-          : '<div class="ghost">No file changes for this run.</div>';
-        return;
-      }
-      const view = document.createElement("div");
-      view.className = "diff-view";
-      const lines = String(text).split(/\r?\n/);
-      for (const line of lines) {
-        const row = document.createElement("div");
-        const isAddition = line.startsWith("+") && !line.startsWith("+++");
-        const isRemoval = line.startsWith("-") && !line.startsWith("---");
-        const isHeader = line.startsWith("diff --git") || line.startsWith("index ") || line.startsWith("@@") || line.startsWith("--- ") || line.startsWith("+++ ");
-        const cls = isAddition ? "added" : isRemoval ? "removed" : isHeader ? "header" : "context";
-        row.className = `diff-line ${cls}`;
-        row.innerHTML = `<span class="diff-gutter">${isAddition ? "+" : isRemoval ? "-" : " "}</span><span class="diff-text">${escapeHtml(line)}</span>`;
-        view.appendChild(row);
-      }
-      body.appendChild(view);
-    }
-
-    function closeDiffFlyout() {
-      $("diffFlyout").hidden = true;
       activeDiffId = null;
+      switchStage("transcript", id);
     }
 
-    async function openDiff(id) {
-      const run = lastRuns.find((entry) => entry.id === id);
-      if (!run) return;
-      const st = panelState(id);
-      if (activeDiffId === id && !$("diffFlyout").hidden) {
-        closeDiffFlyout();
-        st.diff = false;
+    function openDiff(id) {
+      id = id ? String(id) : "";
+      if (!id) return;
+      if (stageTab === "diff" && stageRunId === id) {
+        switchStage("worktrees");
+        activeDiffId = null;
         return;
       }
-      st.diff = true;
-      $("diffFlyout").hidden = false;
       activeDiffId = id;
-      if (diffCache[id]) {
-        renderDiffFlyout(run, diffCache[id]);
-        return;
-      }
-      $("diffFlyoutBody").innerHTML = '<div class="ghost">Loading diff…</div>';
-      try {
-        const text = await api(`/api/runs/${id}/diff`);
-        diffCache[id] = text || "";
-        st.diffText = diffCache[id];
-        renderDiffFlyout(run, diffCache[id]);
-      } catch (e) {
-        $("diffFlyoutBody").innerHTML = `<div class="err">${escapeHtml(String(e))}</div>`;
-      }
+      activeTranscriptId = null;
+      switchStage("diff", id);
     }
 
     function escapeHtml(s) {
@@ -1433,6 +1535,7 @@
           }),
         });
         $("box").value = "";
+        switchRightTab("desk");
         await render();
         $("hint").textContent = "";
       } catch (e) {
@@ -1450,17 +1553,13 @@
     document.querySelectorAll(".tab").forEach((btn) => {
       btn.onclick = () => switchRightTab(btn.dataset.tab);
     });
-    $("closeDiffFlyout").onclick = closeDiffFlyout;
-    $("diffFlyout").onclick = (e) => {
-      if (e.target.id === "diffFlyout") closeDiffFlyout();
-    };
-    $("closeTranscriptFlyout").onclick = closeTranscriptFlyout;
-    $("transcriptFlyout").onclick = (e) => {
-      if (e.target.id === "transcriptFlyout") closeTranscriptFlyout();
-    };
+    document.querySelectorAll(".stage-tab").forEach((btn) => {
+      btn.onclick = () => switchStage(btn.dataset.stage);
+    });
     document.addEventListener("keydown", (e) => {
-      if (e.key === "Escape" && activeDiffId) closeDiffFlyout();
-      if (e.key === "Escape" && activeTranscriptId) closeTranscriptFlyout();
+      if (e.key === "Escape" && (stageTab === "diff" || stageTab === "transcript")) {
+        switchStage("worktrees");
+      }
     });
     $("worker").onchange = () => {
       if (reply.worker && $("worker").value !== reply.worker) setReply({});

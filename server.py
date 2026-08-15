@@ -681,6 +681,43 @@ def create_worktree(project: dict, worker: str, rid: str) -> str:
     return str(dest.resolve())
 
 
+def list_project_worktrees(pid: str) -> list:
+    root = project_dir(pid) / "worktrees"
+    if not root.exists():
+        return []
+    by_id = {r.get("id"): r for r in list_runs(pid)}
+    out = []
+    for child in sorted(root.iterdir(), key=lambda p: p.name.lower()):
+        if not child.is_dir():
+            continue
+        name = child.name
+        worker, _, rid = name.partition("-")
+        run = by_id.get(rid) or {}
+        path = str(child.resolve())
+        git = is_git_repo(path)
+        head = git_head(path) if git else None
+        branch = ""
+        if git:
+            code, br, _ = git_run(path, ["rev-parse", "--abbrev-ref", "HEAD"])
+            if code == 0:
+                branch = br
+        out.append(
+            {
+                "name": name,
+                "worker": run.get("worker") or worker,
+                "run_id": rid or None,
+                "contest_id": run.get("contest_id"),
+                "role": run.get("role"),
+                "status": run.get("status") or "orphan",
+                "dir": path,
+                "branch": branch,
+                "head": (head or "")[:12] or None,
+                "dirty": git_has_changes(path) if git else False,
+            }
+        )
+    return out
+
+
 def git_snapshot(directory: str, limit: int = 2000) -> str:
     if not is_git_repo(directory):
         return "(not a git worktree)"
@@ -1641,6 +1678,11 @@ class Handler(SimpleHTTPRequestHandler):
                     attach_review_pick(proj, c)
                     save_contest(pid, c)
             return self._send(200, {"contests": contests})
+        m = re.fullmatch(r"/api/projects/([^/]+)/worktrees", path)
+        if m:
+            if not load_project(m.group(1)):
+                return self._send(404, {"error": "no project"})
+            return self._send(200, {"worktrees": list_project_worktrees(m.group(1))})
         m = re.fullmatch(r"/api/projects/([^/]+)/scores", path)
         if m:
             if not load_project(m.group(1)):
