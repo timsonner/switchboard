@@ -54,14 +54,15 @@ index** (cards), not `transcript.md`.
 | `status` | `queued` \| `running` \| `done` \| `error` |
 | `summary` | ≤ 3 sentences, written after the run (or a stub while running) |
 | `prompt` | What we sent |
+| `parent_run_id` | Prior card in this worker session, if this is a reply |
 | `allow_tools` | bool |
 | `started_at` / `ended_at` | ISO-8601 |
 | `transcript_path` | Relative to the run dir |
 | `offload_path` | Dispatcher JSON |
 
-Follow-up on a card: same `worker` + `dir` + `session_id`. New card in the
-same lineage, or append to this run — pick one when the server is written;
-do not do both.
+Follow-up on a card: same `worker` + `dir` + `session_id`. Always a **new
+card** with `parent_run_id` pointing at the card you replied on. Do not
+append to the old `transcript.md`.
 
 ## What never goes into Grok’s window by default
 

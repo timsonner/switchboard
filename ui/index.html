@@ -12,6 +12,8 @@
       --text: #e8e6e1;
       --muted: #8b909a;
       --accent: #c4a35a;
+      --ok: #7dba7a;
+      --bad: #d27a7a;
     }
     * { box-sizing: border-box; }
     html, body { height: 100%; margin: 0; }
@@ -23,89 +25,408 @@
       grid-template-rows: auto 1fr auto;
     }
     header, footer {
-      padding: 0.6rem 1rem;
+      padding: 0.55rem 1rem;
       border-bottom: 1px solid var(--line);
       color: var(--muted);
       font-size: 0.85rem;
     }
-    footer { border-bottom: 0; border-top: 1px solid var(--line); }
+    footer {
+      border-bottom: 0;
+      border-top: 1px solid var(--line);
+      display: flex;
+      gap: 1rem;
+      align-items: center;
+      flex-wrap: wrap;
+    }
     header strong { color: var(--accent); font-weight: 600; }
     main {
       display: grid;
-      grid-template-columns: 14rem 1fr 18rem;
+      grid-template-columns: 16rem 1fr 21rem;
       min-height: 0;
     }
-    aside, section {
-      padding: 0.75rem 1rem;
-      overflow: auto;
-    }
+    aside, section { padding: 0.75rem 1rem; overflow: auto; min-height: 0; }
     aside { background: var(--panel); border-right: 1px solid var(--line); }
-    .cards { border-left: 1px solid var(--line); background: #16181f; }
+    .cards { border-left: 1px solid var(--line); border-right: 0; background: #16181f; }
     h2 {
       margin: 0 0 0.75rem;
-      font-size: 0.75rem;
+      font-size: 0.72rem;
       letter-spacing: 0.06em;
       text-transform: uppercase;
       color: var(--muted);
     }
-    .item, .card, .msg {
+    .item, .card, .msg, .form {
       border: 1px solid var(--line);
       border-radius: 6px;
       padding: 0.55rem 0.7rem;
       margin-bottom: 0.5rem;
     }
-    .item.active, .card:hover { border-color: var(--accent); }
+    .item { cursor: pointer; }
+    .item.active, .card.open { border-color: var(--accent); }
     .item small, .card small, .msg small { color: var(--muted); display: block; }
     .msg.user { background: #222632; }
-    .ghost { color: var(--muted); font-style: italic; }
-    .status { color: var(--accent); }
+    .msg.system { color: var(--muted); }
+    .ghost { color: var(--muted); }
+    .status-done { color: var(--ok); }
+    .status-error { color: var(--bad); }
+    .status-running { color: var(--accent); }
+    .composer {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 0.4rem;
+      padding: 0.75rem 1rem;
+      border-top: 1px solid var(--line);
+      background: var(--panel);
+    }
+    .row { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }
+    textarea {
+      width: 100%;
+      min-height: 4.2rem;
+      resize: vertical;
+      background: var(--bg);
+      color: var(--text);
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 0.5rem;
+      font: inherit;
+    }
+    input[type="text"] {
+      flex: 1;
+      min-width: 8rem;
+      background: var(--bg);
+      color: var(--text);
+      border: 1px solid var(--line);
+      border-radius: 4px;
+      padding: 0.3rem 0.45rem;
+      font: inherit;
+    }
+    select, button {
+      background: #2a3140;
+      color: var(--text);
+      border: 1px solid var(--line);
+      border-radius: 4px;
+      padding: 0.35rem 0.6rem;
+      font: inherit;
+      cursor: pointer;
+    }
+    button.primary { background: #3d3420; border-color: var(--accent); color: var(--accent); }
+    button.small { padding: 0.15rem 0.45rem; font-size: 0.8rem; }
+    button:disabled { opacity: 0.5; cursor: wait; }
+    pre.transcript {
+      white-space: pre-wrap;
+      font-size: 0.8rem;
+      color: #c9c6bf;
+      margin: 0.4rem 0 0;
+      max-height: 16rem;
+      overflow: auto;
+    }
+    .err { color: var(--bad); }
+    .chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+      border: 1px solid var(--accent);
+      color: var(--accent);
+      border-radius: 999px;
+      padding: 0.15rem 0.55rem;
+      font-size: 0.8rem;
+    }
+    .chip button { padding: 0 0.2rem; border: 0; background: transparent; color: var(--muted); }
+    .summary { margin: 0.25rem 0 0.15rem; }
+    @media (max-width: 900px) {
+      main { grid-template-columns: 1fr; grid-template-rows: auto 1fr auto; }
+      aside { border-right: 0; border-bottom: 1px solid var(--line); max-height: 12rem; }
+      .cards { border-left: 0; border-top: 1px solid var(--line); max-height: 16rem; }
+    }
   </style>
 </head>
 <body>
   <header>
     <strong>Switchboard</strong>
-    — you steer Grok; workers are runs; transcripts stay on disk.
+    — steer Grok; workers are runs; full logs stay on disk.
   </header>
   <main>
     <aside>
       <h2>Projects</h2>
-      <div class="item active">
-        plasma-wayland-rdp
-        <small>C:\Users\tim\plasma-wayland-rdp</small>
+      <div id="projects"></div>
+      <div class="form">
+        <h2>New</h2>
+        <div class="row"><input id="newDir" type="text" placeholder="C:\path\to\project" /></div>
+        <div class="row"><input id="newBrief" type="text" placeholder="brief (optional)" /></div>
+        <button type="button" id="addProject">Add project</button>
       </div>
-      <div class="item">
-        agent-skills
-        <small>C:\Users\tim\agent-skills</small>
+      <div class="form" id="briefBox" hidden>
+        <h2>Brief</h2>
+        <div class="row"><input id="briefEdit" type="text" placeholder="what this project is" /></div>
+        <button type="button" class="small" id="saveBrief">Save brief</button>
       </div>
     </aside>
-    <section>
-      <h2>Grok · front desk</h2>
-      <div class="msg user">
-        Use Codex to review the uncommitted input fix. I want to read the full review.
-        <small>you</small>
-      </div>
-      <div class="msg">
-        Offloaded to Codex in that dir. Card on the right — open the transcript for the P1s. I’ll only keep the summary here.
-        <small>grok · run 7f3a</small>
-      </div>
-      <p class="ghost">Compose lands here by default. “Reply on card” is a follow-up on that worker session.</p>
+    <section style="display:grid;grid-template-rows:auto 1fr;padding:0;min-height:0">
+      <div style="padding:0.75rem 1rem 0"><h2 id="threadTitle">Grok · front desk</h2></div>
+      <div id="thread" style="padding:0 1rem 0.75rem;overflow:auto"></div>
     </section>
     <aside class="cards">
       <h2>Runs</h2>
-      <div class="card">
-        <span class="status">codex · done</span>
-        <small>7f3a · session 01a004c6-…</small>
-        MOVE-before-button; don’t OR PTR_FLAGS_MOVE into the click.
-        <small>open transcript →</small>
-      </div>
-      <div class="card">
-        <span class="status">hermes · done</span>
-        <small>2c91 · 20260815_040815_e07ec7</small>
-        Wrote smoke.txt. Quiet Q&amp;A after.
-        <small>open transcript →</small>
-      </div>
+      <div id="runs"></div>
     </aside>
   </main>
-  <footer>Wireframe only. No server yet. Schema: docs/data-model.md</footer>
+  <div class="composer">
+    <textarea id="box" placeholder="Talk to Grok, or pick a worker to dispatch… Ctrl+Enter to send"></textarea>
+    <div class="row">
+      <label>To
+        <select id="worker">
+          <option value="">Grok (desk)</option>
+        </select>
+      </label>
+      <label><input type="checkbox" id="allowTools" /> allow tools</label>
+      <button type="button" class="small" id="resumeLast" hidden>Resume last session</button>
+      <span id="sessionChip" hidden class="chip">
+        <span id="sessionLabel"></span>
+        <button type="button" id="clearSession" title="clear session">×</button>
+      </span>
+      <button class="primary" type="button" id="send">Send</button>
+      <span class="ghost" id="hint"></span>
+    </div>
+  </div>
+  <footer>
+    <span id="health">…</span>
+    <span class="ghost">Cards: click to read the transcript (not sent to Grok). Reply on a card to resume that worker session.</span>
+  </footer>
+  <script>
+    const $ = (id) => document.getElementById(id);
+    let projects = [];
+    let current = null;
+    let poll = null;
+    let reply = { session_id: "", parent_run_id: "", worker: "" };
+    let lastRuns = [];
+
+    async function api(path, opts) {
+      const r = await fetch(path, opts);
+      const ct = r.headers.get("content-type") || "";
+      const body = ct.includes("application/json") ? await r.json() : await r.text();
+      if (!r.ok) throw new Error((body && body.error) || r.statusText);
+      return body;
+    }
+
+    function setReply(next) {
+      reply = { session_id: "", parent_run_id: "", worker: "", ...next };
+      const chip = $("sessionChip");
+      if (reply.session_id) {
+        chip.hidden = false;
+        $("sessionLabel").textContent = `resume ${reply.worker} ${reply.session_id}`;
+        $("worker").value = reply.worker;
+      } else {
+        chip.hidden = true;
+        $("sessionLabel").textContent = "";
+      }
+      updateResumeLast();
+    }
+
+    function updateResumeLast() {
+      const w = $("worker").value;
+      const btn = $("resumeLast");
+      const hit = lastRuns.find((r) => r.worker === w && r.session_id);
+      const already = reply.session_id && reply.worker === w;
+      btn.hidden = !(w && hit && !already);
+    }
+
+    async function refreshHealth() {
+      try {
+        const h = await api("/api/health");
+        const bits = [];
+        bits.push(h.dispatcher_exists ? "dispatcher ok" : "dispatcher missing");
+        bits.push(h.grok ? "grok " + h.grok : "grok not on PATH");
+        $("health").textContent = bits.join(" · ");
+        $("health").className = h.dispatcher_exists ? "" : "err";
+      } catch (e) {
+        $("health").textContent = String(e);
+        $("health").className = "err";
+      }
+    }
+
+    async function loadWorkers() {
+      const { workers } = await api("/api/workers");
+      const sel = $("worker");
+      const keep = sel.value;
+      sel.innerHTML = '<option value="">Grok (desk)</option>';
+      for (const w of workers) {
+        const o = document.createElement("option");
+        o.value = w;
+        o.textContent = w;
+        sel.appendChild(o);
+      }
+      if (keep) sel.value = keep;
+    }
+
+    async function loadProjects() {
+      const data = await api("/api/projects");
+      projects = data.projects || [];
+      const box = $("projects");
+      box.innerHTML = "";
+      if (!projects.length) {
+        box.innerHTML = '<p class="ghost">Add a project directory.</p>';
+        $("briefBox").hidden = true;
+        return;
+      }
+      if (!current || !projects.find((p) => p.id === current)) current = projects[0].id;
+      for (const p of projects) {
+        const el = document.createElement("div");
+        el.className = "item" + (p.id === current ? " active" : "");
+        el.innerHTML = `${escapeHtml(p.id)}<small>${escapeHtml(p.dir)}</small>`;
+        el.onclick = () => { current = p.id; setReply({}); render(); };
+        box.appendChild(el);
+      }
+      const proj = projects.find((p) => p.id === current);
+      $("briefBox").hidden = !proj;
+      if (proj) $("briefEdit").value = proj.brief || "";
+    }
+
+    async function render() {
+      await loadProjects();
+      const proj = projects.find((p) => p.id === current);
+      $("threadTitle").textContent = proj ? `Grok · ${proj.id}` : "Grok · front desk";
+      if (!proj) {
+        $("thread").innerHTML = '<p class="ghost">No project selected.</p>';
+        $("runs").innerHTML = "";
+        lastRuns = [];
+        return;
+      }
+      const th = await api(`/api/projects/${proj.id}/thread`);
+      const thread = $("thread");
+      thread.innerHTML = "";
+      for (const ev of th.events || []) {
+        const el = document.createElement("div");
+        el.className = "msg" + (ev.role === "user" ? " user" : "");
+        el.innerHTML = `${escapeHtml(ev.text || "")}<small>${escapeHtml(ev.role)}${ev.run_ids ? " · " + ev.run_ids.join(",") : ""}</small>`;
+        thread.appendChild(el);
+      }
+      thread.scrollTop = thread.scrollHeight;
+      const rs = await api(`/api/projects/${proj.id}/runs`);
+      lastRuns = rs.runs || [];
+      const runs = $("runs");
+      runs.innerHTML = "";
+      if (!lastRuns.length) runs.innerHTML = '<p class="ghost">No runs yet.</p>';
+      for (const r of lastRuns) {
+        const el = document.createElement("div");
+        el.className = "card" + (reply.parent_run_id === r.id ? " open" : "");
+        const parent = r.parent_run_id ? ` · from ${r.parent_run_id}` : "";
+        el.innerHTML = `<span class="status-${escapeHtml(r.status)}">${escapeHtml(r.worker)} · ${escapeHtml(r.status)}</span>
+          <small>${escapeHtml(r.id)} · ${escapeHtml(r.session_id || "no session")}${parent}</small>
+          <div class="summary">${escapeHtml(r.summary || r.prompt || "")}</div>
+          <div class="row">
+            <button type="button" class="small" data-open>transcript</button>
+            <button type="button" class="small" data-reply ${r.session_id ? "" : "disabled"}>reply on this run</button>
+          </div>
+          <pre class="transcript" hidden></pre>`;
+        el.querySelector("[data-open]").onclick = (e) => { e.stopPropagation(); openTranscript(el, r.id); };
+        el.querySelector("[data-reply]").onclick = (e) => {
+          e.stopPropagation();
+          if (!r.session_id) return;
+          setReply({ session_id: r.session_id, parent_run_id: r.id, worker: r.worker });
+          $("box").focus();
+        };
+        runs.appendChild(el);
+      }
+      updateResumeLast();
+      const busy = lastRuns.some((r) => r.status === "running");
+      if (busy && !poll) poll = setInterval(render, 2500);
+      if (!busy && poll) { clearInterval(poll); poll = null; }
+    }
+
+    async function openTranscript(card, id) {
+      const pre = card.querySelector("pre");
+      pre.hidden = !pre.hidden;
+      if (!pre.hidden && !pre.textContent) {
+        pre.textContent = "loading…";
+        try { pre.textContent = await api(`/api/runs/${id}/transcript`); }
+        catch (e) { pre.textContent = String(e); }
+      }
+    }
+
+    function escapeHtml(s) {
+      return String(s).replace(/[&<>"']/g, (c) => ({
+        "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+      }[c]));
+    }
+
+    $("addProject").onclick = async () => {
+      $("hint").textContent = "";
+      try {
+        const created = await api("/api/projects", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ dir: $("newDir").value, brief: $("newBrief").value }),
+        });
+        $("newDir").value = "";
+        $("newBrief").value = "";
+        current = created.id;
+        await render();
+      } catch (e) { $("hint").textContent = String(e); $("hint").className = "err"; }
+    };
+
+    $("saveBrief").onclick = async () => {
+      if (!current) return;
+      try {
+        await api(`/api/projects/${current}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ brief: $("briefEdit").value }),
+        });
+        $("hint").textContent = "brief saved";
+        $("hint").className = "ghost";
+        await render();
+      } catch (e) { $("hint").textContent = String(e); $("hint").className = "err"; }
+    };
+
+    $("send").onclick = async () => {
+      if (!current) { $("hint").textContent = "Add a project first."; return; }
+      const text = $("box").value.trim();
+      if (!text) return;
+      $("send").disabled = true;
+      $("hint").textContent = "sending…";
+      $("hint").className = "ghost";
+      try {
+        await api(`/api/projects/${current}/message`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            text,
+            worker: $("worker").value,
+            allow_tools: $("allowTools").checked,
+            session_id: reply.session_id || "",
+            parent_run_id: reply.parent_run_id || "",
+          }),
+        });
+        $("box").value = "";
+        await render();
+        $("hint").textContent = "";
+      } catch (e) {
+        $("hint").textContent = String(e);
+        $("hint").className = "err";
+      } finally {
+        $("send").disabled = false;
+      }
+    };
+
+    $("clearSession").onclick = () => setReply({});
+    $("worker").onchange = () => {
+      if (reply.worker && $("worker").value !== reply.worker) setReply({});
+      updateResumeLast();
+    };
+    $("resumeLast").onclick = () => {
+      const w = $("worker").value;
+      const hit = lastRuns.find((r) => r.worker === w && r.session_id);
+      if (hit) setReply({ session_id: hit.session_id, parent_run_id: hit.id, worker: w });
+    };
+
+    $("box").addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) $("send").click();
+    });
+
+    (async () => {
+      await refreshHealth();
+      await loadWorkers();
+      await render();
+    })();
+  </script>
 </body>
 </html>
