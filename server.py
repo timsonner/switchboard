@@ -1335,6 +1335,31 @@ class Handler(SimpleHTTPRequestHandler):
             except Exception:
                 pass
 
+    def do_DELETE(self):
+        try:
+            parsed = urlparse(self.path)
+            path = parsed.path.rstrip("/")
+            if not path.startswith("/api/"):
+                return self._send(404, {"error": "not found"})
+            m = re.fullmatch(r"/api/projects/([^/]+)", path)
+            if not m:
+                return self._send(404, {"error": "not found"})
+            pid = m.group(1)
+            proj = load_project(pid)
+            # The persisted ID must match the requested directory. This keeps a
+            # malformed request from resolving outside the projects store.
+            if not proj or proj.get("id") != pid:
+                return self._send(404, {"error": "no project"})
+            with _lock:
+                shutil.rmtree(project_dir(pid))
+            return self._send(200, {"removed": pid})
+        except Exception as exc:
+            sys.stderr.write("DELETE %s failed: %s\n" % (self.path, exc))
+            try:
+                self._send(500, {"error": str(exc)})
+            except Exception:
+                pass
+
 
 def recover_orphans() -> None:
     """A reboot leaves cards stuck in running/queued. Mark them so the queue can move."""
