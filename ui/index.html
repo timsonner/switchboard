@@ -1040,8 +1040,9 @@
         const rid = wt.run_id ? String(wt.run_id) : "";
         el.className = "card worktree-card" + (rid && rid === stageRunId ? " active" : "");
         const dirty = wt.dirty ? '<span class="status-queued">dirty</span>' : '<span class="ghost">clean</span>';
+        const when = fmtTime(wt.started_at || wt.commit_at);
         el.innerHTML = `<span class="status-${escapeHtml(wt.status || "done")}">${escapeHtml(wt.worker || "?")} · ${escapeHtml(wt.status || "")}${wt.role ? " · " + escapeHtml(wt.role) : ""}</span>
-          <small>${escapeHtml(wt.branch || wt.name)} · ${escapeHtml(wt.head || "no HEAD")}${wt.contest_id ? " · contest " + escapeHtml(wt.contest_id) : ""}</small>
+          <small>${when ? escapeHtml(when) + " · " : ""}${escapeHtml(wt.branch || wt.name)} · ${escapeHtml(wt.head || "no HEAD")}${wt.contest_id ? " · contest " + escapeHtml(wt.contest_id) : ""}</small>
           <small>${escapeHtml(wt.dir || "")}</small>
           <div class="row">
             <span>${dirty}</span>

@@ -697,10 +697,14 @@ def list_project_worktrees(pid: str) -> list:
         git = is_git_repo(path)
         head = git_head(path) if git else None
         branch = ""
+        commit_at = None
         if git:
             code, br, _ = git_run(path, ["rev-parse", "--abbrev-ref", "HEAD"])
             if code == 0:
                 branch = br
+            code, when, _ = git_run(path, ["log", "-1", "--format=%cI"])
+            if code == 0 and when:
+                commit_at = when
         out.append(
             {
                 "name": name,
@@ -713,8 +717,11 @@ def list_project_worktrees(pid: str) -> list:
                 "branch": branch,
                 "head": (head or "")[:12] or None,
                 "dirty": git_has_changes(path) if git else False,
+                "started_at": run.get("started_at"),
+                "commit_at": commit_at,
             }
         )
+    out.sort(key=lambda t: t.get("started_at") or t.get("commit_at") or "", reverse=True)
     return out
 
 
