@@ -134,6 +134,37 @@
     .worktree-card .row { margin-top: 0.35rem; }
     .worktree-card { cursor: pointer; }
     .worktree-card.active { border-color: var(--accent); background: #221c12; }
+    .git-graph { position: relative; min-height: 8rem; }
+    .git-graph-svg { position: absolute; left: 0; top: 0; overflow: visible; }
+    .git-graph-rows { position: relative; z-index: 1; }
+    .git-graph-row {
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+      height: 30px;
+      min-width: 0;
+      border-radius: 6px;
+      padding-right: 0.4rem;
+    }
+    .git-graph-row:hover { background: rgba(255,255,255,0.03); }
+    .git-graph-row.active { background: #221c12; }
+    .git-graph-row.clickable { cursor: pointer; }
+    .git-ref {
+      flex: 0 0 auto;
+      font-size: 0.66rem;
+      font-weight: 650;
+      border-radius: 999px;
+      padding: 0.05rem 0.4rem;
+      border: 1px solid var(--line);
+      color: #0e1014;
+      max-width: 11rem;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .git-hash { flex: 0 0 auto; color: var(--muted); font: 0.7rem/1 ui-monospace, monospace; }
+    .git-msg { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.8rem; }
+    .git-time { flex: 0 0 auto; color: var(--muted); font-size: 0.72rem; }
     .score-header {
       padding: 0.2rem 0.2rem 0.6rem;
       margin-bottom: 0.5rem;
@@ -657,6 +688,7 @@
         <button type="button" class="stage-tab" role="tab" data-stage="diff" aria-selected="false">Diff</button>
         <button type="button" class="stage-tab" role="tab" data-stage="transcript" aria-selected="false">Transcript</button>
         <button type="button" class="stage-tab active" role="tab" data-stage="worktrees" aria-selected="true">Worktrees</button>
+        <button type="button" class="stage-tab" role="tab" data-stage="graph" aria-selected="false">Graph</button>
         <span id="stageMeta" class="stage-meta"></span>
       </div>
       <div id="stageBody" class="stage-body">
@@ -713,7 +745,10 @@
     const RIGHT_TABS = ["desk", "team", "contests", "scores"];
     let rightTab = localStorage.getItem("sb-right-tab") || "desk";
     if (!RIGHT_TABS.includes(rightTab)) rightTab = "desk";
-    const STAGE_TABS = ["diff", "transcript", "worktrees"];
+    const STAGE_TABS = ["diff", "transcript", "worktrees", "graph"];
+    let graphCache = null;
+    let graphProject = null;
+    let graphInflight = false;
     let stageTab = "worktrees";
     let stageRunId = null;
     let lastWorktrees = [];
@@ -843,6 +878,111 @@
         .finally(() => { delete diffInflight[id]; });
     }
 
+    function laneColor(i) {
+      const colors = ["#d4b06a", "#7aa2d4", "#6fbf7a", "#c49bdb", "#7ec8c8", "#d27a7a", "#e0a36b", "#8d93a0"];
+      return colors[Math.abs(i) % colors.length];
+    }
+
+    function ensureGraph() {
+      if (!current || graphInflight) return;
+      if (graphProject === current && graphCache) return;
+      graphInflight = true;
+      api(`/api/projects/${current}/graph`)
+        .then((data) => {
+          graphCache = data;
+          graphProject = current;
+          if (stageTab === "graph") renderStage();
+        })
+        .catch((e) => {
+          if (stageTab === "graph") {
+            $("stageBody").innerHTML = `<div class="err">${escapeHtml(String(e))}</div>`;
+          }
+        })
+        .finally(() => { graphInflight = false; });
+    }
+
+    function renderGraphInto(body, data) {
+      body.innerHTML = "";
+      const commits = (data && data.commits) || [];
+      if (!commits.length) {
+        body.innerHTML = `<p class="ghost">${escapeHtml((data && data.error) || "No commits to graph.")}</p>`;
+        return;
+      }
+      const rowH = 30;
+      const laneW = 16;
+      const left = 12;
+      const maxLane = Math.max(1, ...commits.map((c) => Number(c.width) || 1));
+      const svgW = left + maxLane * laneW + 10;
+      const svgH = commits.length * rowH;
+      const xOf = (lane) => left + Number(lane) * laneW;
+      const yOf = (row) => row * rowH + rowH / 2;
+      const ns = "http://www.w3.org/2000/svg";
+      const wrap = document.createElement("div");
+      wrap.className = "git-graph";
+      const svg = document.createElementNS(ns, "svg");
+      svg.setAttribute("class", "git-graph-svg");
+      svg.setAttribute("width", String(svgW));
+      svg.setAttribute("height", String(svgH));
+      svg.setAttribute("viewBox", `0 0 ${svgW} ${svgH}`);
+      const add = (name, attrs) => {
+        const el = document.createElementNS(ns, name);
+        Object.entries(attrs).forEach(([k, v]) => el.setAttribute(k, String(v)));
+        svg.appendChild(el);
+        return el;
+      };
+      commits.forEach((c, i) => {
+        const y = yOf(i);
+        const nextY = i + 1 < commits.length ? yOf(i + 1) : y + rowH / 2;
+        (c.through || []).forEach((lane) => {
+          add("line", {
+            x1: xOf(lane), y1: y - rowH / 2, x2: xOf(lane), y2: y + rowH / 2,
+            stroke: laneColor(lane), "stroke-width": 2,
+          });
+        });
+        (c.edges || []).forEach((e) => {
+          const x1 = xOf(e.from);
+          const x2 = xOf(e.to);
+          const sameRow = Number(e.to) === Number(c.lane) && Number(e.from) !== Number(c.lane);
+          const d = sameRow
+            ? `M ${x1} ${y - 8} C ${x1} ${y}, ${x2} ${y}, ${x2} ${y}`
+            : (x1 === x2
+              ? `M ${x1} ${y} L ${x2} ${nextY}`
+              : `M ${x1} ${y} C ${x1} ${y + 11}, ${x2} ${nextY - 11}, ${x2} ${nextY}`);
+          add("path", { d, fill: "none", stroke: laneColor(e.to), "stroke-width": 2 });
+        });
+        add("circle", {
+          cx: xOf(c.lane), cy: y, r: c.is_head ? 5.5 : 4,
+          fill: laneColor(c.lane),
+          stroke: c.is_head ? "#eceae4" : "none",
+          "stroke-width": c.is_head ? 1.5 : 0,
+        });
+      });
+      const rows = document.createElement("div");
+      rows.className = "git-graph-rows";
+      rows.style.paddingLeft = svgW + "px";
+      commits.forEach((c) => {
+        const row = document.createElement("div");
+        const rid = c.run_id ? String(c.run_id) : "";
+        row.className = "git-graph-row" + (rid && rid === stageRunId ? " active" : "") + (rid ? " clickable" : "");
+        const refs = (c.refs || []).map((ref) => {
+          const pill = document.createElement("span");
+          pill.className = "git-ref";
+          pill.textContent = ref;
+          pill.style.background = laneColor(c.lane);
+          return pill.outerHTML;
+        }).join("");
+        row.innerHTML = `${refs}<span class="git-hash">${escapeHtml(c.short || "")}</span><span class="git-msg">${escapeHtml(c.subject || "")}</span><span class="git-time">${fmtTime(c.date)}</span>`;
+        if (rid) {
+          row.onclick = () => openDiff(rid);
+          row.title = "Open diff for " + rid;
+        }
+        rows.appendChild(row);
+      });
+      wrap.appendChild(svg);
+      wrap.appendChild(rows);
+      body.appendChild(wrap);
+    }
+
     function ensureTranscript(id) {
       id = id ? String(id) : "";
       if (!id) return;
@@ -923,6 +1063,20 @@
       if (stageTab === "worktrees") {
         meta.textContent = lastWorktrees.length ? lastWorktrees.length + " trees" : "";
         renderWorktreesInto(body);
+        return;
+      }
+      if (stageTab === "graph") {
+        meta.textContent = graphCache && graphCache.commits ? graphCache.commits.length + " commits" : "";
+        if (!current) {
+          body.innerHTML = '<p class="ghost">Select a project to see the branch graph.</p>';
+          return;
+        }
+        if (graphCache && graphProject === current) {
+          renderGraphInto(body, graphCache);
+          return;
+        }
+        body.innerHTML = '<div class="ghost">Loading graph…</div>';
+        ensureGraph();
         return;
       }
       if (!stageRunId) {
@@ -1080,6 +1234,8 @@
         lastRuns = [];
         lastContests = [];
         lastWorktrees = [];
+        graphCache = null;
+        graphProject = null;
         setTabBadge("team", 0);
         setTabBadge("contests", 0);
         $("counts").textContent = "desk + team";
@@ -1119,6 +1275,10 @@
       lastRuns = rs.runs || [];
       lastContests = cs.contests || [];
       lastWorktrees = wt.worktrees || [];
+      if (graphProject && graphProject !== current) {
+        graphCache = null;
+        graphProject = null;
+      }
       if (stageTab === "worktrees") renderStage();
       const scoreBox = $("scores");
       const ranked = sc.ranked || [];

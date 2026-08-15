@@ -718,6 +718,116 @@ def list_project_worktrees(pid: str) -> list:
     return out
 
 
+GRAPH_REF_RE = re.compile(r"^(?:HEAD -> |tag: |refs/(?:heads|remotes|tags)/)?")
+
+
+def _parse_git_refs(raw: str) -> list[str]:
+    refs = []
+    for part in (raw or "").split(","):
+        name = GRAPH_REF_RE.sub("", part.strip())
+        if name and name != "HEAD":
+            refs.append(name)
+    return refs
+
+
+def _assign_graph_lanes(commits: list[dict]) -> None:
+    """Newest-first lane layout (gitk / GitKraken style)."""
+    present = {c["hash"] for c in commits}
+    lanes: list[str | None] = []
+
+    def occupy(h: str) -> int:
+        for i, v in enumerate(lanes):
+            if v is None:
+                lanes[i] = h
+                return i
+        lanes.append(h)
+        return len(lanes) - 1
+
+    for c in commits:
+        incoming = [i for i, v in enumerate(lanes) if v == c["hash"]]
+        col = incoming[0] if incoming else occupy(c["hash"])
+        c["lane"] = col
+        c["through"] = [i for i, v in enumerate(lanes) if v]
+        parents = [p for p in c.get("parents") or [] if p in present]
+        first = parents[0] if parents else None
+        for i in incoming:
+            lanes[i] = None
+        while col >= len(lanes):
+            lanes.append(None)
+        edges = []
+        if first:
+            lanes[col] = first
+            edges.append({"from": col, "to": col})
+        for i in incoming[1:]:
+            edges.append({"from": i, "to": col})
+        for p in parents[1:]:
+            dest = next((i for i, v in enumerate(lanes) if v == p), None)
+            if dest is None:
+                dest = occupy(p)
+            edges.append({"from": col, "to": dest})
+        c["parents"] = parents
+        c["edges"] = edges
+        c["width"] = max(len(lanes), col + 1)
+
+
+def project_graph(pid: str, limit: int = 100) -> dict:
+    proj = load_project(pid)
+    if not proj:
+        return {"commits": [], "head": None, "error": "no project"}
+    directory = proj["dir"]
+    if not is_git_repo(directory):
+        return {"commits": [], "head": None, "error": "not a git repo"}
+    head = git_head(directory)
+    code, out, err = git_run(
+        directory,
+        [
+            "log",
+            "--all",
+            "--date-order",
+            f"--max-count={int(limit)}",
+            "--pretty=format:%H%x00%P%x00%D%x00%s%x00%cI%x00%h",
+        ],
+        timeout=30,
+    )
+    if code != 0:
+        return {"commits": [], "head": head, "error": err or out or "git log failed"}
+    commits = []
+    for line in (out or "").splitlines():
+        parts = line.split("\x00")
+        if len(parts) < 6:
+            continue
+        full, parents, deco, subject, when, short = parts[:6]
+        commits.append(
+            {
+                "hash": full,
+                "short": short or full[:8],
+                "parents": [p for p in (parents or "").split() if p],
+                "refs": _parse_git_refs(deco),
+                "subject": subject or "",
+                "date": when or "",
+            }
+        )
+    _assign_graph_lanes(commits)
+    trees = list_project_worktrees(pid)
+    by_branch = {t.get("branch"): t for t in trees if t.get("branch")}
+    by_head = {}
+    for t in trees:
+        if t.get("head"):
+            by_head[t["head"]] = t
+    for c in commits:
+        tip = None
+        for ref in c["refs"]:
+            if ref in by_branch:
+                tip = by_branch[ref]
+                break
+        if not tip:
+            tip = by_head.get(c["short"]) or by_head.get((c["hash"] or "")[:12])
+        c["run_id"] = (tip or {}).get("run_id")
+        c["worker"] = (tip or {}).get("worker")
+        c["is_head"] = bool(head and c["hash"] == head)
+    return {"commits": commits, "head": (head or "")[:12] if head else None}
+
+
 def git_snapshot(directory: str, limit: int = 2000) -> str:
     if not is_git_repo(directory):
         return "(not a git worktree)"
@@ -1683,6 +1793,11 @@ class Handler(SimpleHTTPRequestHandler):
             if not load_project(m.group(1)):
                 return self._send(404, {"error": "no project"})
             return self._send(200, {"worktrees": list_project_worktrees(m.group(1))})
+        m = re.fullmatch(r"/api/projects/([^/]+)/graph", path)
+        if m:
+            if not load_project(m.group(1)):
+                return self._send(404, {"error": "no project"})
+            return self._send(200, project_graph(m.group(1)))
         m = re.fullmatch(r"/api/projects/([^/]+)/scores", path)
         if m:
             if not load_project(m.group(1)):
