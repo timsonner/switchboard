@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Switchboard</title>
+  <style>
+    :root {
+      --bg: #12141a;
+      --panel: #1b1e27;
+      --line: #2a2f3a;
+      --text: #e8e6e1;
+      --muted: #8b909a;
+      --accent: #c4a35a;
+    }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; margin: 0; }
+    body {
+      font: 15px/1.45 "Segoe UI", system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+    }
+    header, footer {
+      padding: 0.6rem 1rem;
+      border-bottom: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 0.85rem;
+    }
+    footer { border-bottom: 0; border-top: 1px solid var(--line); }
+    header strong { color: var(--accent); font-weight: 600; }
+    main {
+      display: grid;
+      grid-template-columns: 14rem 1fr 18rem;
+      min-height: 0;
+    }
+    aside, section {
+      padding: 0.75rem 1rem;
+      overflow: auto;
+    }
+    aside { background: var(--panel); border-right: 1px solid var(--line); }
+    .cards { border-left: 1px solid var(--line); background: #16181f; }
+    h2 {
+      margin: 0 0 0.75rem;
+      font-size: 0.75rem;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+    .item, .card, .msg {
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 0.55rem 0.7rem;
+      margin-bottom: 0.5rem;
+    }
+    .item.active, .card:hover { border-color: var(--accent); }
+    .item small, .card small, .msg small { color: var(--muted); display: block; }
+    .msg.user { background: #222632; }
+    .ghost { color: var(--muted); font-style: italic; }
+    .status { color: var(--accent); }
+  </style>
+</head>
+<body>
+  <header>
+    <strong>Switchboard</strong>
+    — you steer Grok; workers are runs; transcripts stay on disk.
+  </header>
+  <main>
+    <aside>
+      <h2>Projects</h2>
+      <div class="item active">
+        plasma-wayland-rdp
+        <small>C:\Users\tim\plasma-wayland-rdp</small>
+      </div>
+      <div class="item">
+        agent-skills
+        <small>C:\Users\tim\agent-skills</small>
+      </div>
+    </aside>
+    <section>
+      <h2>Grok · front desk</h2>
+      <div class="msg user">
+        Use Codex to review the uncommitted input fix. I want to read the full review.
+        <small>you</small>
+      </div>
+      <div class="msg">
+        Offloaded to Codex in that dir. Card on the right — open the transcript for the P1s. I’ll only keep the summary here.
+        <small>grok · run 7f3a</small>
+      </div>
+      <p class="ghost">Compose lands here by default. “Reply on card” is a follow-up on that worker session.</p>
+    </section>
+    <aside class="cards">
+      <h2>Runs</h2>
+      <div class="card">
+        <span class="status">codex · done</span>
+        <small>7f3a · session 01a004c6-…</small>
+        MOVE-before-button; don’t OR PTR_FLAGS_MOVE into the click.
+        <small>open transcript →</small>
+      </div>
+      <div class="card">
+        <span class="status">hermes · done</span>
+        <small>2c91 · 20260815_040815_e07ec7</small>
+        Wrote smoke.txt. Quiet Q&amp;A after.
+        <small>open transcript →</small>
+      </div>
+    </aside>
+  </main>
+  <footer>Wireframe only. No server yet. Schema: docs/data-model.md</footer>
+</body>
+</html>
