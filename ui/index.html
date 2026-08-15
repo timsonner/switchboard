@@ -383,6 +383,10 @@
     input[type="text"] {
       flex: 1;
       min-width: 7rem;
+      min-height: 2.2rem;
+      height: auto;
+      line-height: 1.4;
+      overflow: visible;
       background: var(--bg);
       color: var(--text);
       border: 1px solid var(--line);
@@ -445,6 +449,11 @@
       background: #161a22;
     }
     .diff-flyout-header h3 { margin: 0 0 0.15rem; font-size: 0.95rem; }
+    .flyout-meta {
+      overflow-wrap: anywhere;
+      white-space: normal;
+      max-width: 56rem;
+    }
     .diff-flyout-body {
       padding: 0.75rem 1rem 1rem;
       overflow: auto;
@@ -496,12 +505,14 @@
       font-family: ui-monospace, monospace;
       font-size: 0.8rem;
       line-height: 1.45;
-      white-space: pre;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
       overflow: auto;
       border: 1px solid var(--line);
       border-radius: 8px;
       background: #06080c;
     }
+    .diff-text { min-width: 0; }
     .diff-line {
       display: grid;
       grid-template-columns: 1.2rem minmax(0, 1fr);
@@ -626,7 +637,7 @@
       <div class="diff-flyout-header">
         <div>
           <h3 id="diffFlyoutTitle">Diff review</h3>
-          <div id="diffFlyoutMeta" class="ghost"></div>
+          <div id="diffFlyoutMeta" class="ghost flyout-meta"></div>
         </div>
         <button type="button" id="closeDiffFlyout">Close</button>
       </div>
@@ -640,7 +651,7 @@
       <div class="diff-flyout-header">
         <div>
           <h3 id="transcriptFlyoutTitle">Transcript</h3>
-          <div id="transcriptFlyoutMeta" class="ghost"></div>
+          <div id="transcriptFlyoutMeta" class="ghost flyout-meta"></div>
         </div>
         <button type="button" id="closeTranscriptFlyout">Close</button>
       </div>
@@ -1129,7 +1140,12 @@
       const body = $("transcriptFlyoutBody");
       body.innerHTML = "";
       $("transcriptFlyoutTitle").textContent = `Transcript · ${run.id}`;
-      $("transcriptFlyoutMeta").textContent = `${run.worker || "run"} · ${run.status || "unknown"}${run.summary ? " · " + run.summary : ""}`;
+      $("transcriptFlyoutMeta").textContent = [
+        run.worker || "run",
+        run.status || "unknown",
+        run.role || "",
+        run.contest_id ? "contest " + run.contest_id : "",
+      ].filter(Boolean).join(" · ");
       const view = document.createElement("pre");
       view.className = "transcript-view";
       view.textContent = text || "(no transcript yet)";
@@ -1168,9 +1184,16 @@
       const body = $("diffFlyoutBody");
       body.innerHTML = "";
       $("diffFlyoutTitle").textContent = `Diff · ${run.id}`;
-      $("diffFlyoutMeta").textContent = `${run.worker || "run"} · ${run.status || "unknown"}${run.summary ? " · " + run.summary : ""}`;
-      if (!text || !String(text).trim()) {
-        body.innerHTML = '<div class="ghost">No diff available for this run.</div>';
+      $("diffFlyoutMeta").textContent = [
+        run.worker || "run",
+        run.status || "unknown",
+        run.role || "",
+        run.contest_id ? "contest " + run.contest_id : "",
+      ].filter(Boolean).join(" · ");
+      if (!text || !String(text).trim() || String(text).trim() === "(no file changes)") {
+        body.innerHTML = run.role === "review"
+          ? '<div class="ghost">No file changes on the candidate worktrees.</div>'
+          : '<div class="ghost">No file changes for this run.</div>';
         return;
       }
       const view = document.createElement("div");

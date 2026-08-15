@@ -290,6 +290,67 @@ def clean_text(text: str) -> str:
     return text.replace("\u250a", " ").replace("\x00", "").strip()
 
 
+CRLF_WARN_RE = re.compile(r"^warning: in the working copy of .+$", re.I | re.M)
+CODEX_TOOL_ERR_RE = re.compile(
+    r"\d{4}-\d{2}-\d{2}T\S+\s+ERROR codex_core::tools::router:.*?(?=\n\d{4}-\d{2}-\d{2}T|\Z)",
+    re.S,
+)
+
+
+def scrub_stderr(text: str) -> str:
+    """Drop known-false worker noise so transcripts don't look like a crash.
+
+    Codex keeps running `node --check ui/index.html`. Node 22 throws
+    ERR_UNKNOWN_FILE_EXTENSION and dumps the whole command output into stderr.
+    """
+    text = CRLF_WARN_RE.sub("", clean_text(text)).strip()
+    if not text:
+        return ""
+
+    def _drop_html_node_check(match: re.Match) -> str:
+        block = match.group(0)
+        if "ERR_UNKNOWN_FILE_EXTENSION" in block and ".html" in block.lower():
+            return (
+                "Worker ran Node syntax-check on an .html file "
+                "(Node cannot load .html). Not a product error.\n"
+            )
+        return block
+
+    text = CODEX_TOOL_ERR_RE.sub(_drop_html_node_check, text)
+    if "ERR_UNKNOWN_FILE_EXTENSION" in text and ".html" in text.lower():
+        text = (
+            "Worker ran Node syntax-check on an .html file "
+            "(Node cannot load .html). Not a product error."
+        )
+    return re.sub(r"\n{3,}", "\n\n", text).strip()
+
+
+def format_transcript(run: dict, result: dict | None = None) -> str:
+    stdout = ""
+    stderr = ""
+    if result:
+        stdout = result.get("stdout") or ""
+        stderr = result.get("stderr") or ""
+    return "\n".join(
+        [
+            f"# {run.get('worker')} {run.get('id')}",
+            "",
+            f"session: {run.get('session_id')}",
+            f"status: {run.get('status')}",
+            f"role: {run.get('role') or ''}",
+            "",
+            "## stdout",
+            "",
+            clean_text(stdout) or "(empty)",
+            "",
+            "## stderr",
+            "",
+            scrub_stderr(stderr) or "(empty)",
+            "",
+        ]
+    )
+
+
 def summarize(stdout: str, stderr: str) -> str:
     blob = clean_text(stdout) or clean_text(stderr)
     candidates = []
@@ -308,35 +369,83 @@ def summarize(stdout: str, stderr: str) -> str:
     return blob[:200] or "no output"
 
 
-def git_worktree_diff(directory: str, limit: int = 20000) -> str:
-    if not is_git_repo(directory):
+def infer_diff_base(directory: str, stored: str | None = None) -> str | None:
+    """Fork point for a contest worktree: stored SHA, else merge-base with main."""
+    if stored:
+        code, out, _ = git_run(directory, ["rev-parse", "--verify", f"{stored}^{{commit}}"])
+        if code == 0 and out:
+            return out
+    head = git_head(directory)
+    if not head:
+        return None
+    for ref in ("master", "main", "origin/master", "origin/main"):
+        code, mb, _ = git_run(directory, ["merge-base", "HEAD", ref])
+        if code != 0 or not mb:
+            continue
+        if mb != head:
+            return mb
+        code, msg, _ = git_run(directory, ["log", "-1", "--format=%s"])
+        code, branch, _ = git_run(directory, ["rev-parse", "--abbrev-ref", "HEAD"])
+        if (msg or "").lower().startswith("contest ") or (branch or "").startswith("sb/"):
+            code, parent, _ = git_run(directory, ["rev-parse", "HEAD^"])
+            if code == 0 and parent:
+                return parent
+        return mb
+    return None
+
+
+def git_worktree_diff(directory: str, limit: int = 80000, base: str | None = None) -> str:
+    """Unstaged + staged + commits since the worktree's fork point.
+
+    `git diff` alone is empty after apply commits the winner tree, and a
+    review run's dir is the project — status is one line like
+    `## master...origin/master`.
+    """
+    if not directory or not is_git_repo(directory):
         return "(not a git worktree)"
-    chunks = []
-    for args in (
-        ["git", "-C", directory, "status", "-sb"],
-        ["git", "-C", directory, "diff", "--no-color"],
-    ):
-        try:
-            proc = subprocess.run(
-                args,
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                timeout=20,
-            )
-            if proc.stdout:
-                chunks.append(proc.stdout)
-            if proc.stderr and proc.stderr.strip():
-                chunks.append(proc.stderr)
-        except Exception as exc:
-            chunks.append(str(exc))
+    chunks: list[str] = []
+    code, status, err = git_run(directory, ["status", "-sb"])
+    if status:
+        chunks.append(status)
+    elif err:
+        chunks.append(err)
+    for args in (["diff", "--no-color"], ["diff", "--cached", "--no-color"]):
+        _, out, _ = git_run(directory, args)
+        if out:
+            chunks.append(out)
+    fork = infer_diff_base(directory, base)
+    head = git_head(directory)
+    if fork and head and fork != head:
+        _, patch, _ = git_run(directory, ["diff", "--no-color", fork, "HEAD"])
+        if patch:
+            chunks.append(f"# commits {fork[:8]}..{head[:8]}")
+            chunks.append(patch)
     text = clean_text("\n".join(chunks)).strip()
-    if not text:
-        return "(no diff)"
+    hunks = any(line.startswith(("diff --git", "+++", "---", "@@", "+", "-")) for line in text.splitlines())
+    if not hunks:
+        return "(no file changes)"
     if len(text) > limit:
         text = text[:limit] + "\n…(truncated)"
     return text
+
+
+def run_diff(pid: str, run: dict) -> str:
+    """Diff a run. Review cards show every implementer's tree, not the project dir."""
+    contest = load_contest(pid, run["contest_id"]) if run.get("contest_id") else None
+    fallback = ((contest or {}).get("apply") or {}).get("pre_head")
+    if run.get("role") == "review" and contest:
+        ids = list(contest.get("implementer_run_ids") or [])
+        if ids:
+            parts = []
+            for rid in ids:
+                impl = load_run(pid, rid) or {}
+                label = f"{impl.get('worker') or '?'} {rid}"
+                directory = impl.get("dir") or ""
+                parts.append(f"# candidate {label}")
+                parts.append(git_worktree_diff(directory, base=impl.get("base_head") or fallback))
+            return "\n\n".join(parts)
+    directory = run.get("dir") or str(project_dir(pid))
+    return git_worktree_diff(str(directory), base=run.get("base_head") or fallback)
 
 
 def discover_hermes_session(directory: str) -> str | None:
@@ -858,23 +967,7 @@ def launch_run_work(cfg: dict, project: dict, card: dict, rdir: Path, session: s
         )
         write_json(rdir / "run.json", card)
         write_json(rdir / "offload.json", result)
-        md = [
-            f"# {card['worker']} {card['id']}",
-            "",
-            f"session: {card.get('session_id')}",
-            f"status: {status}",
-            f"role: {card.get('role') or ''}",
-            "",
-            "## stdout",
-            "",
-            clean_text(stdout) or "(empty)",
-            "",
-            "## stderr",
-            "",
-            clean_text(stderr) or "(empty)",
-            "",
-        ]
-        (rdir / "transcript.md").write_text("\n".join(md), encoding="utf-8")
+        (rdir / "transcript.md").write_text(format_transcript(card, result), encoding="utf-8")
         bump_score(project["id"], card["worker"], "runs")
         bump_score(project["id"], card["worker"], "done" if status == "done" else "error")
         append_jsonl(
@@ -947,6 +1040,7 @@ def start_run(
         "contest_id": contest_id or None,
         "parent_run_id": parent_run_id or None,
         "allow_tools": allow_tools,
+        "base_head": git_head(directory),
         "started_at": utcnow(),
         "ended_at": None,
         "transcript_path": "transcript.md",
@@ -992,6 +1086,7 @@ def start_contest(cfg: dict, project: dict, spec: dict, user_text: str) -> tuple
             f"Contest {cid}. Role: implementer. Produce your best isolated solution.\n"
             f"Do not invoke other harness CLIs. Do not start server.py, serve.ps1, "
             f"serve.cmd, or bind port 8787 — Switchboard is already running.\n"
+            f"Do not run node --check (or node) on .html files; Node cannot parse them.\n"
             f"Goal:\n{goal}"
         )
         cards.append(
@@ -1573,8 +1668,13 @@ class Handler(SimpleHTTPRequestHandler):
             if not found:
                 return self._send(404, {"error": "no run"})
             pid, run = found
-            tpath = project_dir(pid) / "runs" / run["id"] / run.get("transcript_path", "transcript.md")
-            text = tpath.read_text(encoding="utf-8") if tpath.exists() else "(no transcript yet)"
+            rdir = project_dir(pid) / "runs" / run["id"]
+            offload = read_json(rdir / (run.get("offload_path") or "offload.json"), None)
+            if offload:
+                text = format_transcript(run, offload)
+            else:
+                tpath = rdir / run.get("transcript_path", "transcript.md")
+                text = tpath.read_text(encoding="utf-8") if tpath.exists() else "(no transcript yet)"
             return self._send(200, text, "text/plain")
         m = re.fullmatch(r"/api/runs/([^/]+)/diff", path)
         if m:
@@ -1582,8 +1682,7 @@ class Handler(SimpleHTTPRequestHandler):
             if not found:
                 return self._send(404, {"error": "no run"})
             pid, run = found
-            directory = run.get("dir") or project_dir(pid)
-            text = git_worktree_diff(str(directory))
+            text = run_diff(pid, run)
             return self._send(200, text, "text/plain")
         self._send(404, {"error": "not found"})
 
