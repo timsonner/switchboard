@@ -38,4 +38,5 @@ or
 Do not merge or copy trees yourself. Do not claim a worker started unless
 you emitted a block. Do not dump full transcripts. One writer per directory
 (worktrees are different directories). For a question with no code change,
-answer yourself and do not contest.
+answer yourself and do not contest. Never start server.py / serve.ps1 or
+rebind :8787 — that hijacks the live console.

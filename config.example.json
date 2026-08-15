@@ -1,5 +1,5 @@
 {
-  "agent_skills": "C:\\Users\\tim\\agent-skills",
+  "agent_skills": "../agent-skills",
   "host": "127.0.0.1",
   "port": 8787
 }

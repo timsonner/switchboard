@@ -74,6 +74,10 @@ def load_config() -> dict:
     env_skills = os.environ.get("SWITCHBOARD_AGENT_SKILLS")
     if env_skills:
         cfg["agent_skills"] = env_skills
+    skills = Path(cfg["agent_skills"])
+    if not skills.is_absolute():
+        skills = (ROOT / skills).resolve()
+    cfg["agent_skills"] = str(skills)
     return cfg
 
 
@@ -217,6 +221,37 @@ def summarize(stdout: str, stderr: str) -> str:
     if candidates:
         return candidates[0]
     return blob[:200] or "no output"
+
+
+def git_worktree_diff(directory: str, limit: int = 20000) -> str:
+    if not is_git_repo(directory):
+        return "(not a git worktree)"
+    chunks = []
+    for args in (
+        ["git", "-C", directory, "status", "-sb"],
+        ["git", "-C", directory, "diff", "--no-color"],
+    ):
+        try:
+            proc = subprocess.run(
+                args,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=20,
+            )
+            if proc.stdout:
+                chunks.append(proc.stdout)
+            if proc.stderr and proc.stderr.strip():
+                chunks.append(proc.stderr)
+        except Exception as exc:
+            chunks.append(str(exc))
+    text = clean_text("\n".join(chunks)).strip()
+    if not text:
+        return "(no diff)"
+    if len(text) > limit:
+        text = text[:limit] + "\n…(truncated)"
+    return text
 
 
 def discover_hermes_session(directory: str) -> str | None:
@@ -855,7 +890,9 @@ def start_contest(cfg: dict, project: dict, spec: dict, user_text: str) -> tuple
     for worker in impl:
         prompt = (
             f"Contest {cid}. Role: implementer. Produce your best isolated solution.\n"
-            f"Do not invoke other harness CLIs. Goal:\n{goal}"
+            f"Do not invoke other harness CLIs. Do not start server.py, serve.ps1, "
+            f"serve.cmd, or bind port 8787 — Switchboard is already running.\n"
+            f"Goal:\n{goal}"
         )
         cards.append(
             start_run(
@@ -1159,6 +1196,15 @@ class Handler(SimpleHTTPRequestHandler):
             tpath = project_dir(pid) / "runs" / run["id"] / run.get("transcript_path", "transcript.md")
             text = tpath.read_text(encoding="utf-8") if tpath.exists() else "(no transcript yet)"
             return self._send(200, text, "text/plain")
+        m = re.fullmatch(r"/api/runs/([^/]+)/diff", path)
+        if m:
+            found = find_run(m.group(1))
+            if not found:
+                return self._send(404, {"error": "no run"})
+            pid, run = found
+            directory = run.get("dir") or project_dir(pid)
+            text = git_worktree_diff(str(directory))
+            return self._send(200, text, "text/plain")
         self._send(404, {"error": "not found"})
 
     def api_post(self, path: str) -> None:
@@ -1310,6 +1356,11 @@ def recover_orphans() -> None:
 
 def main() -> None:
     refresh_path()
+    if "worktrees" in ROOT.parts:
+        raise SystemExit(
+            f"refusing to start from contest worktree {ROOT}. "
+            "Run server.py from the Switchboard repo root."
+        )
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     recover_orphans()
     cfg = load_config()

@@ -34,7 +34,7 @@ Needs Python 3, `grok` on PATH (desk replies), and
 `SWITCHBOARD_AGENT_SKILLS`).
 
 ```powershell
-cd C:\Users\tim\switchboard
+# from this repo
 .\serve.cmd
 # or, from another process (survives a closing chat):
 powershell -NoProfile -ExecutionPolicy Bypass -File .\start-detached.ps1
@@ -55,7 +55,7 @@ new card. `data/` is local and gitignored.
 Optional `config.json` in this repo root (see [config.example.json](config.example.json)):
 
 ```json
-{ "agent_skills": "C:\\Users\\tim\\agent-skills", "host": "127.0.0.1", "port": 8787 }
+{ "agent_skills": "../agent-skills", "host": "127.0.0.1", "port": 8787 }
 ```
 
 ## Layout on disk
