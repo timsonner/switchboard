@@ -63,6 +63,9 @@
     }
     .item { cursor: pointer; }
     .item.active { border-color: var(--accent); background: #221c12; }
+    .project-item { display: flex; align-items: flex-start; gap: 0.4rem; }
+    .project-item-main { min-width: 0; flex: 1; }
+    button.danger { color: var(--bad); }
     .item small, .card small, .msg small { color: var(--muted); display: block; font-size: 0.75rem; }
     .msg.user { background: #222836; }
     .msg.system { background: transparent; color: var(--muted); border-style: dashed; }
@@ -405,7 +408,20 @@
       for (const p of projects) {
         const el = document.createElement("div");
         el.className = "item" + (p.id === current ? " active" : "");
-        el.innerHTML = `${escapeHtml(p.id)}<small>${escapeHtml(p.dir)}</small>`;
+        const main = document.createElement("div");
+        main.className = "project-item-main";
+        main.innerHTML = `${escapeHtml(p.id)}<small>${escapeHtml(p.dir)}</small>`;
+        const remove = document.createElement("button");
+        remove.type = "button";
+        remove.className = "small danger";
+        remove.textContent = "Remove";
+        remove.title = `Remove ${p.id} from Switchboard`;
+        remove.onclick = (event) => {
+          event.stopPropagation();
+          removeProject(p);
+        };
+        el.classList.add("project-item");
+        el.append(main, remove);
         el.onclick = () => { current = p.id; localStorage.setItem("sb-project", current); setReply({}); render(); };
         box.appendChild(el);
       }
@@ -629,6 +645,27 @@
         });
         await render();
         $("hint").textContent = "";
+      } catch (e) {
+        $("hint").textContent = String(e);
+        $("hint").className = "err";
+      }
+    }
+
+    async function removeProject(project) {
+      const message = `Remove “${project.id}” from Switchboard? This deletes its Switchboard history, runs, and contests, but does not delete ${project.dir}.`;
+      if (!window.confirm(message)) return;
+      $("hint").textContent = "removing project…";
+      $("hint").className = "ghost";
+      try {
+        await api(`/api/projects/${encodeURIComponent(project.id)}`, { method: "DELETE" });
+        if (current === project.id) {
+          current = null;
+          localStorage.removeItem("sb-project");
+          setReply({});
+        }
+        await render();
+        $("hint").textContent = "project removed";
+        $("hint").className = "ghost";
       } catch (e) {
         $("hint").textContent = String(e);
         $("hint").className = "err";
