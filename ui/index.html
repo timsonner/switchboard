@@ -393,8 +393,6 @@
     .project-menu button:hover { background: #1e2534; }
     button.danger { color: var(--bad); }
     .item small, .card small, .msg small { color: var(--muted); display: block; font-size: 0.75rem; }
-    .msg.user { background: #222836; }
-    .msg.system { background: transparent; color: var(--muted); border-style: dashed; }
     .ghost { color: var(--muted); }
     .status-done { color: var(--ok); }
     .status-error { color: var(--bad); }
@@ -597,7 +595,7 @@
       font-size: 0.78rem;
     }
     .chip button { padding: 0 0.15rem; border: 0; background: transparent; color: var(--muted); }
-    .summary { margin: 0.25rem 0 0.2rem; }
+    .summary { margin: 0.25rem 0 0.2rem; white-space: pre-wrap; overflow-wrap: anywhere; }
     .role { color: var(--accent); font-size: 0.75rem; }
     #thread { padding: 0 0 0.75rem; overflow: auto; min-height: 0; }
     @media (max-width: 960px) {
@@ -728,11 +726,11 @@
 
     function fmtTime(ts) {
       if (!ts) return "";
-      try {
-        return new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-      } catch {
-        return "";
-      }
+      const d = new Date(ts);
+      if (Number.isNaN(d.getTime())) return "";
+      const date = d.toLocaleDateString([], { month: "short", day: "numeric" });
+      const time = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+      return `${date} · ${time}`;
     }
 
     function elapsed(ts) {
@@ -1091,13 +1089,27 @@
       const th = await api(`/api/projects/${proj.id}/thread`);
       const thread = $("thread");
       thread.innerHTML = "";
-      for (const ev of th.events || []) {
+      const events = (th.events || []).slice().reverse();
+      for (const ev of events) {
         const el = document.createElement("div");
-        el.className = "msg" + (ev.role === "user" ? " user" : ev.role === "system" ? " system" : "");
-        el.innerHTML = `${escapeHtml(ev.text || "")}<small>${fmtTime(ev.ts)} · ${escapeHtml(ev.role)}${ev.run_ids ? " · " + ev.run_ids.join(",") : ""}</small>`;
+        el.className = "card";
+        const role = ev.role || "desk";
+        const statusCls = role === "user" ? "running" : role === "system" ? "queued" : "done";
+        const title = role === "user" ? "you" : role === "system" ? "system" : "grok";
+        const ids = ev.run_ids || [];
+        el.innerHTML = `<span class="status-${statusCls}">${escapeHtml(title)}</span>
+          <small>${fmtTime(ev.ts)} · ${escapeHtml(role)}${ids.length ? " · " + ids.map(escapeHtml).join(", ") : ""}</small>
+          <div class="summary">${escapeHtml(ev.text || "")}</div>
+          ${ids.length ? `<div class="row">${ids.map((rid) => `<button type="button" class="small" data-diff="${escapeHtml(rid)}">diff ${escapeHtml(rid)}</button><button type="button" class="small" data-transcript="${escapeHtml(rid)}">transcript</button>`).join("")}</div>` : ""}`;
+        el.querySelectorAll("[data-diff]").forEach((btn) => {
+          btn.onclick = (e) => { e.stopPropagation(); openDiff(btn.getAttribute("data-diff")); };
+        });
+        el.querySelectorAll("[data-transcript]").forEach((btn) => {
+          btn.onclick = (e) => { e.stopPropagation(); openTranscript(btn.getAttribute("data-transcript")); };
+        });
         thread.appendChild(el);
       }
-      thread.scrollTop = thread.scrollHeight;
+      thread.scrollTop = 0;
       const [rs, cs, sc, wt] = await Promise.all([
         api(`/api/projects/${proj.id}/runs`),
         api(`/api/projects/${proj.id}/contests`),
@@ -1230,7 +1242,7 @@
           ? `Reviewer pick: ${labelRun(rec)}${c.recommended_how === "veto-all" ? " (veto-all)" : ""}`
           : (awaiting ? "Reviewer did not name a winner — pick a run or veto." : "");
         el.innerHTML = `<span class="status-${escapeHtml(c.status === "approved" ? "done" : c.status === "vetoed" || c.status === "error" ? "error" : "running")}">${escapeHtml(c.status)}${applied ? " · applied" : ""}</span>
-          <small>${escapeHtml(c.id)} · ${escapeHtml((c.implementers || []).join(" vs "))} · review ${escapeHtml(c.reviewer || "")}</small>
+          <small>${fmtTime(c.created_at)} · ${escapeHtml(c.id)} · ${escapeHtml((c.implementers || []).join(" vs "))} · review ${escapeHtml(c.reviewer || "")}</small>
           <div class="summary">${escapeHtml(c.goal || "")}</div>
           <small>runs ${escapeHtml((c.implementer_run_ids || []).map(labelRun).join(", "))}${c.winner_run_id ? " · winner " + escapeHtml(labelRun(c.winner_run_id)) : ""}</small>
           ${recLine ? `<div class="summary">${escapeHtml(recLine)}</div>` : ""}
