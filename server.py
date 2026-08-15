@@ -1033,6 +1033,40 @@ def _terminal(status: str) -> bool:
     return status in ("done", "error")
 
 
+def parse_review_pick(text: str, candidates: list[str]) -> tuple[str | None, str]:
+    """Read a reviewer's prose. Never auto-approves — only a suggestion."""
+    blob = clean_text(text or "")
+    if re.search(r"\bveto[\s-]?all\b", blob, re.I):
+        return None, "veto-all"
+    m = re.search(r"winner[^.\n]{0,48}?([a-f0-9]{8})", blob, re.I)
+    if m and m.group(1) in candidates:
+        return m.group(1), "winner-line"
+    for rid in candidates:
+        if re.search(rf"\bwinner[^\n]{{0,48}}{re.escape(rid)}", blob, re.I):
+            return rid, "winner-id"
+    return None, "unparsed"
+
+
+def attach_review_pick(project: dict, contest: dict) -> dict:
+    candidates = list(contest.get("implementer_run_ids") or [])
+    blob_parts = []
+    for rid in contest.get("review_run_ids") or []:
+        card = load_run(project["id"], rid) or {}
+        blob_parts.append(card.get("summary") or "")
+        tpath = (
+            project_dir(project["id"])
+            / "runs"
+            / rid
+            / card.get("transcript_path", "transcript.md")
+        )
+        if tpath.exists():
+            blob_parts.append(tpath.read_text(encoding="utf-8", errors="replace"))
+    pick, how = parse_review_pick("\n".join(blob_parts), candidates)
+    contest["recommended_winner_run_id"] = pick
+    contest["recommended_how"] = how
+    return contest
+
+
 def advance_contest(cfg: dict, project: dict, cid: str) -> None:
     contest = load_contest(project["id"], cid)
     if not contest or contest.get("status") in ("approved", "vetoed", "error"):
@@ -1053,8 +1087,10 @@ def advance_contest(cfg: dict, project: dict, cid: str) -> None:
         rev_states = [_run_status(project["id"], rid) for rid in contest.get("review_run_ids") or []]
         if rev_states and all(_terminal(s) for s in rev_states):
             contest["status"] = "awaiting_desk"
+            attach_review_pick(project, contest)
             contest["updated_at"] = utcnow()
             save_contest(project["id"], contest)
+            rec = contest.get("recommended_winner_run_id") or "none"
             append_jsonl(
                 project_dir(project["id"]) / "thread.jsonl",
                 {
@@ -1062,6 +1098,7 @@ def advance_contest(cfg: dict, project: dict, cid: str) -> None:
                     "role": "system",
                     "text": (
                         f"Contest {cid} is awaiting an operator verdict. "
+                        f"Reviewer suggestion: {rec}. "
                         "It will not approve or apply itself."
                     ),
                     "run_ids": contest.get("review_run_ids") or [],
@@ -1073,7 +1110,8 @@ def start_review(cfg: dict, project: dict, contest: dict) -> None:
     parts = [
         f"Contest {contest['id']} peer review. You do not implement. Compare the candidates.",
         f"Goal: {contest.get('goal')}",
-        "Recommend exactly one winner_run_id or say veto-all, with reasons.",
+        "Recommend exactly one winner. End with a line: Winner: <8-char-run-id>",
+        "Or: Winner: veto-all. Do not approve or apply anything yourself.",
         "Do not spawn other harness CLIs.",
     ]
     for rid in contest.get("implementer_run_ids") or []:
@@ -1488,7 +1526,14 @@ class Handler(SimpleHTTPRequestHandler):
         if m:
             if not load_project(m.group(1)):
                 return self._send(404, {"error": "no project"})
-            return self._send(200, {"contests": list_contests(m.group(1))})
+            pid = m.group(1)
+            proj = load_project(pid)
+            contests = list_contests(pid)
+            for c in contests:
+                if c.get("status") == "awaiting_desk" and "recommended_winner_run_id" not in c:
+                    attach_review_pick(proj, c)
+                    save_contest(pid, c)
+            return self._send(200, {"contests": contests})
         m = re.fullmatch(r"/api/projects/([^/]+)/scores", path)
         if m:
             if not load_project(m.group(1)):

@@ -579,12 +579,22 @@
         const approved = c.status === "approved";
         const impl = (c.implementer_run_ids || []).join(", ");
         const applied = !!c.applied;
+        const rec = c.recommended_winner_run_id || "";
+        const labelRun = (rid) => {
+          const hit = lastRuns.find((r) => r.id === rid);
+          return hit ? `${rid} (${hit.worker})` : rid;
+        };
+        const recLine = rec
+          ? `Reviewer pick: ${labelRun(rec)}${c.recommended_how === "veto-all" ? " (veto-all)" : ""}`
+          : (awaiting ? "Reviewer did not name a winner — pick a run or veto." : "");
         el.innerHTML = `<span class="status-${escapeHtml(c.status === "approved" ? "done" : c.status === "vetoed" || c.status === "error" ? "error" : "running")}">${escapeHtml(c.status)}${applied ? " · applied" : ""}</span>
           <small>${escapeHtml(c.id)} · ${escapeHtml((c.implementers || []).join(" vs "))} · review ${escapeHtml(c.reviewer || "")}</small>
           <div class="summary">${escapeHtml(c.goal || "")}</div>
-          <small>runs ${escapeHtml(impl)}${c.winner_run_id ? " · winner " + c.winner_run_id : ""}</small>
+          <small>runs ${escapeHtml((c.implementer_run_ids || []).map(labelRun).join(", "))}${c.winner_run_id ? " · winner " + escapeHtml(labelRun(c.winner_run_id)) : ""}</small>
+          ${recLine ? `<div class="summary">${escapeHtml(recLine)}</div>` : ""}
           ${awaiting ? `<div class="row">
-            ${(c.implementer_run_ids || []).map((rid) => `<button type="button" class="small" data-approve="${rid}">approve ${rid}</button>`).join("")}
+            ${rec ? `<button type="button" class="primary small" data-approve="${escapeHtml(rec)}">approve reviewer pick</button>` : ""}
+            ${(c.implementer_run_ids || []).filter((rid) => rid !== rec).map((rid) => `<button type="button" class="small" data-approve="${rid}">approve ${escapeHtml(labelRun(rid))}</button>`).join("")}
             <button type="button" class="small" data-veto>veto all</button>
           </div>` : ""}
           ${approved ? `<div class="row">
