@@ -127,14 +127,6 @@
     button.primary { background: #3d3420; border-color: var(--accent); color: var(--accent); }
     button.small { padding: 0.12rem 0.45rem; font-size: 0.78rem; }
     button:disabled { opacity: 0.5; cursor: wait; }
-    pre.transcript {
-      white-space: pre-wrap;
-      font-size: 0.78rem;
-      color: #c9c6bf;
-      margin: 0.4rem 0 0;
-      max-height: 14rem;
-      overflow: auto;
-    }
     pre.diff {
       white-space: pre;
       font-size: 0.68rem;
@@ -182,6 +174,18 @@
       padding: 0.75rem 1rem 1rem;
       overflow: auto;
       background: #0f131a;
+    }
+    .transcript-view {
+      min-height: 100%;
+      margin: 0;
+      padding: 0.85rem 1rem;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      color: #dfe4ec;
+      background: #06080c;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      font: 0.8rem/1.5 ui-monospace, monospace;
     }
     .picker-flyout {
       width: min(36rem, 92vw);
@@ -348,6 +352,20 @@
       </div>
     </div>
   </div>
+  <div id="transcriptFlyout" class="diff-flyout-backdrop" hidden>
+    <div class="diff-flyout" role="dialog" aria-modal="true" aria-labelledby="transcriptFlyoutTitle">
+      <div class="diff-flyout-header">
+        <div>
+          <h3 id="transcriptFlyoutTitle">Transcript</h3>
+          <div id="transcriptFlyoutMeta" class="ghost"></div>
+        </div>
+        <button type="button" id="closeTranscriptFlyout">Close</button>
+      </div>
+      <div id="transcriptFlyoutBody" class="diff-flyout-body">
+        <div class="ghost">Pick a run to review its full transcript.</div>
+      </div>
+    </div>
+  </div>
   <div id="dirPicker" class="diff-flyout-backdrop" hidden>
     <div class="picker-flyout" role="dialog" aria-modal="true" aria-labelledby="dirPickerTitle">
       <div class="diff-flyout-header">
@@ -375,10 +393,12 @@
     let lastContests = [];
     const openPanels = {};
     const diffCache = {};
+    const transcriptCache = {};
     let activeDiffId = null;
+    let activeTranscriptId = null;
 
     function panelState(id) {
-      if (!openPanels[id]) openPanels[id] = { transcript: false, diff: false, transcriptText: "", diffText: "" };
+      if (!openPanels[id]) openPanels[id] = { diff: false, diffText: "" };
       return openPanels[id];
     }
 
@@ -609,14 +629,12 @@
           <small>${fmtTime(r.started_at)} · ${escapeHtml(r.id)} · ${escapeHtml(sid)}${contestBit}</small>
           <div class="summary">${escapeHtml(r.summary || r.prompt || "")}</div>
           <div class="row">
-            <button type="button" class="small" data-open>transcript</button>
+            <button type="button" class="small" data-transcript>transcript</button>
             <button type="button" class="small" data-diff>diff</button>
             <button type="button" class="small" data-review ${r.session_id ? "" : "disabled"}>review</button>
             <button type="button" class="small" data-reply ${r.session_id ? "" : "disabled"}>reply</button>
-          </div>
-          <pre class="transcript" hidden></pre>`;
-        restorePanels(el, r.id);
-        el.querySelector("[data-open]").onclick = (e) => { e.stopPropagation(); openTranscript(el, r.id); };
+          </div>`;
+        el.querySelector("[data-transcript]").onclick = (e) => { e.stopPropagation(); openTranscript(r.id); };
         el.querySelector("[data-reply]").onclick = (e) => {
           e.stopPropagation();
           if (!r.session_id) return;
@@ -642,31 +660,42 @@
       if (!busy && poll) { clearInterval(poll); poll = null; }
     }
 
-    function restorePanels(card, id) {
-      const st = panelState(id);
-      const tPre = card.querySelector("pre.transcript");
-      if (st.transcript) {
-        tPre.hidden = false;
-        tPre.textContent = st.transcriptText || "loading…";
-      }
+    function renderTranscriptFlyout(run, text) {
+      const body = $("transcriptFlyoutBody");
+      body.innerHTML = "";
+      $("transcriptFlyoutTitle").textContent = `Transcript · ${run.id}`;
+      $("transcriptFlyoutMeta").textContent = `${run.worker || "run"} · ${run.status || "unknown"}${run.summary ? " · " + run.summary : ""}`;
+      const view = document.createElement("pre");
+      view.className = "transcript-view";
+      view.textContent = text || "(no transcript yet)";
+      body.appendChild(view);
     }
 
-    async function openTranscript(card, id) {
-      const pre = card.querySelector("pre.transcript");
-      const st = panelState(id);
-      st.transcript = !st.transcript;
-      pre.hidden = !st.transcript;
-      if (!st.transcript) return;
-      if (st.transcriptText) {
-        pre.textContent = st.transcriptText;
+    function closeTranscriptFlyout() {
+      $("transcriptFlyout").hidden = true;
+      activeTranscriptId = null;
+    }
+
+    async function openTranscript(id) {
+      const run = lastRuns.find((entry) => entry.id === id);
+      if (!run) return;
+      if (activeTranscriptId === id && !$("transcriptFlyout").hidden) {
+        closeTranscriptFlyout();
         return;
       }
-      pre.textContent = "loading…";
+      $("transcriptFlyout").hidden = false;
+      activeTranscriptId = id;
+      if (Object.prototype.hasOwnProperty.call(transcriptCache, id)) {
+        renderTranscriptFlyout(run, transcriptCache[id]);
+        return;
+      }
+      $("transcriptFlyoutBody").innerHTML = '<div class="ghost">Loading transcript…</div>';
       try {
-        st.transcriptText = await api(`/api/runs/${id}/transcript`);
-        pre.textContent = st.transcriptText;
+        const text = await api(`/api/runs/${id}/transcript`);
+        transcriptCache[id] = text || "";
+        renderTranscriptFlyout(run, transcriptCache[id]);
       } catch (e) {
-        pre.textContent = String(e);
+        $("transcriptFlyoutBody").innerHTML = `<div class="err">${escapeHtml(String(e))}</div>`;
       }
     }
 
@@ -929,8 +958,13 @@
     $("diffFlyout").onclick = (e) => {
       if (e.target.id === "diffFlyout") closeDiffFlyout();
     };
+    $("closeTranscriptFlyout").onclick = closeTranscriptFlyout;
+    $("transcriptFlyout").onclick = (e) => {
+      if (e.target.id === "transcriptFlyout") closeTranscriptFlyout();
+    };
     document.addEventListener("keydown", (e) => {
       if (e.key === "Escape" && activeDiffId) closeDiffFlyout();
+      if (e.key === "Escape" && activeTranscriptId) closeTranscriptFlyout();
     });
     $("worker").onchange = () => {
       if (reply.worker && $("worker").value !== reply.worker) setReply({});
