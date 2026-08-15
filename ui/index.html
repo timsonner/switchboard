@@ -92,21 +92,198 @@
     }
     .badge.warn { background: var(--bad); color: #fff; }
     .tab-panel { min-height: 0; overflow: auto; }
-    .score-row {
-      display: grid;
-      grid-template-columns: 5.5rem repeat(3, 1fr);
-      gap: 0.4rem;
-      align-items: center;
-      padding: 0.35rem 0.5rem;
-      border: 1px solid var(--line);
-      border-radius: 7px;
-      margin-bottom: 0.35rem;
-      background: #141821;
-      font-size: 0.78rem;
+    .score-header {
+      padding: 0.2rem 0.2rem 0.6rem;
+      margin-bottom: 0.5rem;
+      border-bottom: 1px solid var(--line);
     }
-    .score-name { font-weight: 600; }
-    .score-num { color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .score-num b { color: var(--text); }
+    .score-header-title {
+      font-size: 0.75rem;
+      font-weight: 600;
+      color: var(--text);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 0.25rem;
+    }
+    .score-header-desc {
+      font-size: 0.7rem;
+      color: var(--muted);
+      line-height: 1.35;
+    }
+    .score-summary-bar {
+      display: flex;
+      gap: 0.35rem;
+      margin-top: 0.45rem;
+    }
+    .score-summary-pill {
+      background: #141821;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 0.25rem 0.4rem;
+      font-size: 0.68rem;
+      color: var(--muted);
+      flex: 1;
+      text-align: center;
+      white-space: nowrap;
+    }
+    .score-summary-pill b {
+      color: var(--text);
+      font-weight: 650;
+    }
+    .score-card {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 0.55rem 0.7rem;
+      margin-bottom: 0.45rem;
+      background: #141821;
+      transition: border-color 0.15s, background-color 0.15s;
+    }
+    .score-card:hover {
+      border-color: #3e485e;
+    }
+    .score-card.top-rank {
+      border-color: #554425;
+      background: #191612;
+    }
+    .score-card.top-rank:hover {
+      border-color: var(--accent);
+    }
+    .score-top {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.5rem;
+      margin-bottom: 0.45rem;
+    }
+    .score-identity {
+      display: flex;
+      align-items: center;
+      gap: 0.45rem;
+      min-width: 0;
+    }
+    .score-rank {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 1.35rem;
+      height: 1.35rem;
+      border-radius: 50%;
+      background: #222836;
+      border: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 0.68rem;
+      font-weight: 700;
+      flex-shrink: 0;
+    }
+    .score-card.top-rank .score-rank {
+      background: #3d3420;
+      border-color: var(--accent);
+      color: var(--accent);
+    }
+    .score-name {
+      font-weight: 650;
+      font-size: 0.82rem;
+      color: var(--text);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .score-badge-group {
+      display: flex;
+      align-items: center;
+      gap: 0.3rem;
+      flex-shrink: 0;
+    }
+    .score-net {
+      font-size: 0.68rem;
+      font-weight: 700;
+      padding: 0.12rem 0.45rem;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      background: #1c212c;
+      color: var(--muted);
+    }
+    .score-net.pos {
+      background: #192b1d;
+      border-color: #2a5a32;
+      color: var(--ok);
+    }
+    .score-net.neg {
+      background: #2b1919;
+      border-color: #5a2a2a;
+      color: var(--bad);
+    }
+    .score-stats {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 0.3rem;
+      margin-bottom: 0.45rem;
+    }
+    .score-stat {
+      background: #1c212c;
+      border: 1px solid var(--line);
+      border-radius: 5px;
+      padding: 0.25rem 0.2rem;
+      text-align: center;
+      min-width: 0;
+    }
+    .score-stat .stat-lbl {
+      display: block;
+      font-size: 0.62rem;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: var(--muted);
+      margin-bottom: 0.1rem;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .score-stat .stat-val {
+      display: block;
+      font-size: 0.82rem;
+      font-weight: 700;
+      color: var(--text);
+      line-height: 1.1;
+    }
+    .score-stat.stat-win .stat-val { color: var(--accent); }
+    .score-stat.stat-veto .stat-val { color: var(--muted); }
+    .score-stat.stat-done .stat-val { color: var(--ok); }
+    .score-stat.stat-err.has-err .stat-val { color: var(--bad); }
+    .score-stat.stat-err.has-err {
+      border-color: #4a2424;
+      background: #241616;
+    }
+    .score-bar-container {
+      display: flex;
+      flex-direction: column;
+      gap: 0.25rem;
+    }
+    .score-bar {
+      height: 4px;
+      border-radius: 999px;
+      background: #222836;
+      display: flex;
+      overflow: hidden;
+    }
+    .score-bar-fill {
+      height: 100%;
+      background: var(--ok);
+      transition: width 0.3s;
+    }
+    .score-bar-err {
+      height: 100%;
+      background: var(--bad);
+      transition: width 0.3s;
+    }
+    .score-sub {
+      display: flex;
+      justify-content: space-between;
+      font-size: 0.68rem;
+      color: var(--muted);
+    }
+    .score-sub .score-sub-ok { color: var(--ok); }
+    .score-sub .score-sub-err { color: var(--bad); font-weight: 600; }
     .desk { display: grid; grid-template-rows: auto 1fr; min-height: 0; }
     h2 {
       margin: 0 0 0.6rem;
@@ -666,18 +843,103 @@
       const scores = sc.scores || {};
       if (ranked.length) {
         scoreBox.classList.remove("ghost");
-        scoreBox.innerHTML = ranked.map((w) => {
+        let totalWins = 0, totalVetoes = 0, totalDone = 0, totalErrors = 0, totalRuns = 0;
+        ranked.forEach((w) => {
           const s = scores[w] || {};
-          return `<div class="score-row">
-            <span class="score-name">${escapeHtml(w)}</span>
-            <span class="score-num">wins <b>${s.wins || 0}</b></span>
-            <span class="score-num">vetoes <b>${s.vetoes || 0}</b></span>
-            <span class="score-num">done <b>${s.done || 0}</b> · err <b>${s.error || 0}</b></span>
+          totalWins += (s.wins || 0);
+          totalVetoes += (s.vetoes || 0);
+          totalDone += (s.done || 0);
+          totalErrors += (s.error || 0);
+          totalRuns += (s.runs || ((s.done || 0) + (s.error || 0)));
+        });
+        const totalResolved = totalDone + totalErrors;
+        const overallSuccess = totalResolved > 0 ? Math.round((totalDone / totalResolved) * 100) : 100;
+
+        const headerHtml = `<div class="score-header">
+          <div class="score-header-title">
+            <span>Worker Leaderboard</span>
+            <span class="counts"><b>${ranked.length}</b> workers</span>
+          </div>
+          <div class="score-header-desc">Ranked by net contest score (wins − vetoes), then reliability (done − errors).</div>
+          <div class="score-summary-bar">
+            <div class="score-summary-pill">Wins: <b>${totalWins}</b></div>
+            <div class="score-summary-pill">Runs: <b>${totalRuns}</b></div>
+            <div class="score-summary-pill">Reliability: <b>${overallSuccess}%</b></div>
+          </div>
+        </div>`;
+
+        const cardsHtml = ranked.map((w, idx) => {
+          const s = scores[w] || {};
+          const wins = s.wins || 0;
+          const vetoes = s.vetoes || 0;
+          const done = s.done || 0;
+          const err = s.error || 0;
+          const runs = s.runs || (done + err);
+          const netWins = wins - vetoes;
+          const netCls = netWins > 0 ? "pos" : netWins < 0 ? "neg" : "zero";
+          const netLabel = (netWins > 0 ? `+${netWins}` : `${netWins}`) + " net";
+          const isTop = idx === 0 && (wins > 0 || done > 0);
+          const resolved = done + err;
+          const cleanPct = resolved > 0 ? Math.round((done / resolved) * 100) : (runs > 0 ? 100 : 100);
+          const donePct = resolved > 0 ? Math.round((done / resolved) * 100) : (runs > 0 ? 100 : 0);
+          const errPct = resolved > 0 ? 100 - donePct : 0;
+
+          return `<div class="score-card${isTop ? " top-rank" : ""}" data-worker="${escapeHtml(w)}" title="Click to select ${escapeHtml(w)}">
+            <div class="score-top">
+              <div class="score-identity">
+                <span class="score-rank">${idx + 1}</span>
+                <span class="score-name">${escapeHtml(w)}</span>
+              </div>
+              <div class="score-badge-group">
+                <span class="score-net ${netCls}" title="Net contest score: ${wins} wins minus ${vetoes} vetoes">${netLabel}</span>
+              </div>
+            </div>
+            <div class="score-stats">
+              <div class="score-stat stat-win" title="Contest wins">
+                <span class="stat-lbl">Wins</span>
+                <span class="stat-val">${wins}</span>
+              </div>
+              <div class="score-stat stat-veto" title="Contest vetoes">
+                <span class="stat-lbl">Vetoes</span>
+                <span class="stat-val">${vetoes}</span>
+              </div>
+              <div class="score-stat stat-done" title="Successful runs">
+                <span class="stat-lbl">Done</span>
+                <span class="stat-val">${done}</span>
+              </div>
+              <div class="score-stat stat-err${err > 0 ? " has-err" : ""}" title="Failed / error runs">
+                <span class="stat-lbl">Errors</span>
+                <span class="stat-val">${err}</span>
+              </div>
+            </div>
+            <div class="score-bar-container">
+              <div class="score-bar">
+                <div class="score-bar-fill" style="width:${donePct}%"></div>
+                <div class="score-bar-err" style="width:${errPct}%"></div>
+              </div>
+              <div class="score-sub">
+                <span>${runs} run${runs === 1 ? "" : "s"} (${cleanPct}% clean)</span>
+                ${err > 0 ? `<span class="score-sub-err">${err} failed run${err === 1 ? "" : "s"}</span>` : `<span class="score-sub-ok">all runs clean</span>`}
+              </div>
+            </div>
           </div>`;
         }).join("");
+
+        scoreBox.innerHTML = headerHtml + cardsHtml;
+        scoreBox.querySelectorAll(".score-card").forEach((card) => {
+          card.onclick = () => {
+            const w = card.dataset.worker;
+            if (w && $("worker")) {
+              $("worker").value = w;
+              updateResumeLast();
+              $("box").focus();
+            }
+          };
+          card.style.cursor = "pointer";
+        });
       } else {
         scoreBox.classList.add("ghost");
-        scoreBox.innerHTML = "no scores yet";
+        scoreBox.innerHTML = '<div style="text-align:center;padding:1.5rem 0.5rem;"><div style="font-size:1.2rem;margin-bottom:0.4rem;">📊</div>No scores yet.<br><small style="color:var(--muted);font-size:0.75rem;">Worker rankings and reliability metrics will appear here as runs and contests are completed.</small></div>';
       }
       const contestsEl = $("contests");
       contestsEl.innerHTML = "";
