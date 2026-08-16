@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import queue
 import re
 import shutil
 import subprocess
@@ -195,7 +196,7 @@ def load_project(pid: str) -> dict | None:
     return read_json(path, None)
 
 
-def list_runs(pid: str) -> list:
+def list_runs(pid: str, reconcile: bool = True) -> list:
     runs = project_dir(pid) / "runs"
     if not runs.exists():
         return []
@@ -204,6 +205,13 @@ def list_runs(pid: str) -> list:
         card = d / "run.json"
         if card.exists():
             cards.append(read_json(card, {}))
+    if reconcile:
+        dirty = False
+        for card in cards:
+            if _reconcile_open_run(pid, card):
+                dirty = True
+        if dirty:
+            return list_runs(pid, reconcile=False)
     cards.sort(key=lambda r: r.get("started_at") or "", reverse=True)
     return cards
 
@@ -586,6 +594,11 @@ def norm_dir(path: str) -> str:
         return str(Path(path).resolve()).lower()
     except Exception:
         return (path or "").lower()
+
+
+def is_self_host(project: dict | None) -> bool:
+    """True only when this project directory is the running Switchboard repo."""
+    return bool(project) and norm_dir(project.get("dir") or "") == norm_dir(str(ROOT))
 
 
 def dir_busy(directory: str) -> bool:
@@ -1138,42 +1151,94 @@ def launch_run_work(cfg: dict, project: dict, card: dict, rdir: Path, session: s
             )
         finally:
             stop.set()
-        stdout = result.get("stdout") or ""
-        stderr = result.get("stderr") or ""
-        work_dir = card.get("dir") or project["dir"]
-        status, outcome, code = classify_run(result, work_dir)
-        summary = summarize(stdout, stderr)
-        if outcome == "wrote_files" and (not summary or summary == "no output"):
-            summary = f"wrote files (exit {code})"
-        card.update(
-            {
-                "status": status,
-                "outcome": outcome,
-                "exit_code": code,
-                "session_id": result.get("session_id") or card.get("session_id") or session or None,
-                "summary": summary,
-                "ended_at": utcnow(),
-            }
-        )
-        write_json(rdir / "run.json", card)
         write_json(rdir / "offload.json", result)
-        (rdir / "transcript.md").write_text(format_transcript(card, result), encoding="utf-8")
-        bump_score(project["id"], card["worker"], "runs")
-        bump_score(project["id"], card["worker"], "done" if status == "done" else "error")
-        append_jsonl(
-            project_dir(project["id"]) / "thread.jsonl",
-            {
-                "ts": utcnow(),
-                "role": "system",
-                "text": f"{card['worker']} {card['id']} {status}: {card.get('summary')}",
-                "run_ids": [card["id"]],
-            },
-        )
-        pump_queue(cfg, project)
-        if card.get("contest_id"):
-            advance_contest(cfg, project, card["contest_id"])
+        complete_run(cfg, project, card, rdir, result, session)
 
     threading.Thread(target=work, daemon=True).start()
+
+
+def run_timeout_sec(card: dict) -> int:
+    return 1200 if card.get("allow_tools") or card.get("role") == "review" else 240
+
+
+def _parse_iso(ts: str | None):
+    if not ts:
+        return None
+    try:
+        return datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def complete_run(
+    cfg: dict,
+    project: dict,
+    card: dict,
+    rdir: Path,
+    result: dict,
+    session: str = "",
+) -> None:
+    stdout = result.get("stdout") or ""
+    work_dir = card.get("dir") or project["dir"]
+    status, outcome, code = classify_run(result, work_dir)
+    summary = summarize(stdout, result.get("stderr") or "")
+    if outcome == "wrote_files" and (not summary or summary == "no output"):
+        summary = f"wrote files (exit {code})"
+    card.update(
+        {
+            "status": status,
+            "outcome": outcome,
+            "exit_code": code,
+            "session_id": result.get("session_id") or card.get("session_id") or session or None,
+            "summary": summary,
+            "ended_at": utcnow(),
+        }
+    )
+    write_json(rdir / "run.json", card)
+    (rdir / "transcript.md").write_text(format_transcript(card, result), encoding="utf-8")
+    bump_score(project["id"], card["worker"], "runs")
+    bump_score(project["id"], card["worker"], "done" if status == "done" else "error")
+    append_jsonl(
+        project_dir(project["id"]) / "thread.jsonl",
+        {
+            "ts": utcnow(),
+            "role": "system",
+            "text": f"{card['worker']} {card['id']} {status}: {card.get('summary')}",
+            "run_ids": [card["id"]],
+        },
+    )
+    pump_queue(cfg, project)
+    if card.get("contest_id"):
+        advance_contest(cfg, project, card["contest_id"])
+
+
+def _reconcile_open_run(pid: str, card: dict) -> bool:
+    """Close a running card if the worker already wrote offload.json, or it outlived its timeout."""
+    if card.get("status") != "running":
+        return False
+    rid = card.get("id")
+    if not rid:
+        return False
+    rdir = project_dir(pid) / "runs" / rid
+    offload = read_json(rdir / (card.get("offload_path") or "offload.json"), None)
+    if isinstance(offload, dict) and offload.get("exit_code") is not None:
+        proj = load_project(pid)
+        if not proj:
+            return False
+        complete_run(load_config(), proj, card, rdir, offload, card.get("session_id") or "")
+        server_log(f"reconciled finished run {pid}/{rid}")
+        return True
+    started = _parse_iso(card.get("started_at"))
+    if started:
+        age = (datetime.now(timezone.utc) - started).total_seconds()
+        if age > run_timeout_sec(card) + 90:
+            card["status"] = "error"
+            card["ended_at"] = utcnow()
+            card["summary"] = "offload exceeded timeout (watchdog)"
+            write_json(rdir / "run.json", card)
+            server_log(f"watchdog timed out {pid}/{rid}")
+            return True
+    return False
 
 
 def pump_queue(cfg: dict, project: dict) -> None:
@@ -1272,10 +1337,16 @@ def start_contest(cfg: dict, project: dict, spec: dict, user_text: str) -> tuple
     allow = bool(spec.get("allow_tools", True))
     cards = []
     for worker in impl:
+        extra = ""
+        if is_self_host(project):
+            extra = (
+                "Do not start server.py, serve.ps1, serve.cmd, or bind port 8787 "
+                "— Switchboard is already running.\n"
+            )
         prompt = (
             f"Contest {cid}. Role: implementer. Produce your best isolated solution.\n"
-            f"Do not invoke other harness CLIs. Do not start server.py, serve.ps1, "
-            f"serve.cmd, or bind port 8787 — Switchboard is already running.\n"
+            f"Do not invoke other harness CLIs.\n"
+            f"{extra}"
             f"Do not run node --check (or node) on .html files; Node cannot parse them.\n"
             f"Goal:\n{goal}"
         )
@@ -1590,9 +1661,9 @@ def apply_winner(project: dict, contest: dict, run_id: str = "") -> tuple[str, d
     if stash_ref and stash_restored:
         note += " Restored your uncommitted work on top of the merge."
     note += stash_note
-    if any(n in ("server.py", "serve.ps1", "serve.cmd") for n in changed):
+    if is_self_host(project) and any(n in ("server.py", "serve.ps1", "serve.cmd") for n in changed):
         note += " Restart Switchboard so the running process matches disk."
-    if norm_dir(proj_dir) == norm_dir(str(ROOT)):
+    if is_self_host(project):
         broken = ui_is_broken()
         if broken:
             revert_apply(project, contest)
@@ -1612,6 +1683,34 @@ def ui_is_broken() -> str | None:
         return "merge conflict markers in ui/index.html"
     if "<script>" not in text or "</script>" not in text:
         return "ui/index.html is missing its script"
+    node = shutil.which("node")
+    if not node:
+        return None
+    m = re.search(r"<script>(.*)</script>", text, re.S)
+    if not m:
+        return None
+    tmp = DATA_DIR / "_ui_syntax_check.js"
+    try:
+        tmp.write_text(m.group(1), encoding="utf-8")
+        proc = subprocess.run(
+            [node, "--check", str(tmp)],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=15,
+        )
+    except Exception as exc:
+        return f"could not syntax-check ui script: {exc}"
+    finally:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+    if proc.returncode != 0:
+        err = (proc.stderr or proc.stdout or "syntax error").strip()
+        hit = next((ln.strip() for ln in err.splitlines() if "Error" in ln), err.splitlines()[0] if err else "syntax error")
+        return f"ui/index.html script syntax error: {hit[:180]}"
     return None
 
 
@@ -1767,8 +1866,39 @@ class Handler(SimpleHTTPRequestHandler):
             except Exception:
                 pass
 
+    def _stream_terminal(self, sid: str) -> None:
+        sess = term_get(sid)
+        if not sess:
+            return self._send(404, {"error": "no terminal session"})
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Connection", "keep-alive")
+        self.send_header("X-Accel-Buffering", "no")
+        self.end_headers()
+        try:
+            while True:
+                try:
+                    item = sess.q.get(timeout=1.0)
+                except queue.Empty:
+                    self.wfile.write(b": ping\n\n")
+                    self.wfile.flush()
+                    if not sess.alive:
+                        break
+                    continue
+                if item is None:
+                    break
+                payload = json.dumps(item, ensure_ascii=False).encode("utf-8")
+                self.wfile.write(b"data: " + payload + b"\n\n")
+                self.wfile.flush()
+        except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError):
+            pass
+
     def api_get(self, path: str) -> None:
         cfg = load_config()
+        m = re.fullmatch(r"/api/terminal/([^/]+)/stream", path)
+        if m:
+            return self._stream_terminal(m.group(1))
         if path == "/api/health":
             script = dispatcher_path(cfg)
             grok = which_grok()
@@ -2007,6 +2137,42 @@ class Handler(SimpleHTTPRequestHandler):
                 {"ts": utcnow(), "role": "system", "text": note, "run_ids": [contest.get("winner_run_id")] if contest.get("winner_run_id") else []},
             )
             return self._send(200, {"reply": note, "contest": contest})
+        if path == "/api/terminal":
+            action = str(body.get("action") or "").strip().lower()
+            if action == "open":
+                proj = load_project(str(body.get("project_id") or ""))
+                if not proj:
+                    return self._send(404, {"error": "no project"})
+                sess = term_open(
+                    proj,
+                    str(body.get("shell") or "powershell"),
+                    str(body.get("cwd") or ""),
+                    int(body.get("cols") or 100),
+                    int(body.get("rows") or 32),
+                )
+                return self._send(
+                    200,
+                    {"id": sess.id, "cwd": sess.cwd, "shell": sess.shell, "pty": bool(sess.conpty)},
+                )
+            sid = str(body.get("id") or "")
+            sess = term_get(sid)
+            if not sess:
+                return self._send(404, {"error": "no terminal session"})
+            if action == "input":
+                sess.write(str(body.get("data") or ""))
+                return self._send(200, {"ok": True, "cwd": sess.cwd})
+            if action == "complete":
+                return self._send(
+                    200,
+                    term_complete(sess, str(body.get("line") or ""), int(body.get("cursor") or 0)),
+                )
+            if action == "resize":
+                sess.resize(int(body.get("cols") or 80), int(body.get("rows") or 24))
+                return self._send(200, {"ok": True})
+            if action == "close":
+                term_close(sid)
+                return self._send(200, {"ok": True})
+            return self._send(400, {"error": "unknown terminal action"})
         self._send(404, {"error": "not found"})
 
     def do_PATCH(self):
@@ -2088,6 +2254,334 @@ class Handler(SimpleHTTPRequestHandler):
                 self._send(500, {"error": str(exc)})
             except Exception:
                 pass
+
+
+TERM_LOCK = threading.Lock()
+TERM_SESSIONS: dict[str, "TermSession"] = {}
+
+
+def git_bash_exe() -> str | None:
+    """Prefer the Git for Windows bash, not a random bash on PATH."""
+    homes = [
+        Path(os.environ.get("ProgramW6432") or os.environ.get("ProgramFiles") or r"C:\Program Files")
+        / "Git"
+        / "bin"
+        / "bash.exe",
+        Path(os.environ.get("ProgramFiles(x86)") or r"C:\Program Files (x86)") / "Git" / "bin" / "bash.exe",
+        Path(os.environ.get("LOCALAPPDATA") or "") / "Programs" / "Git" / "bin" / "bash.exe",
+    ]
+    for cand in homes:
+        if cand.is_file():
+            return str(cand)
+    git = shutil.which("git")
+    if git:
+        sibling = Path(git).resolve().parent.parent / "bin" / "bash.exe"
+        if sibling.is_file():
+            return str(sibling)
+    return shutil.which("bash")
+
+
+def _cwd_allowed(project: dict, raw: str) -> str:
+    root = Path(project["dir"]).resolve()
+    want = Path(raw).resolve() if raw else root
+    try:
+        want.relative_to(root)
+    except ValueError:
+        extra = project_dir(project["id"]) / "worktrees"
+        try:
+            want.relative_to(extra.resolve())
+        except ValueError:
+            return str(root)
+    if not want.is_dir():
+        return str(root)
+    return str(want)
+
+
+class TermSession:
+    def __init__(self, sid: str, project_id: str, cwd: str, shell: str, cols: int = 100, rows: int = 32):
+        self.id = sid
+        self.project_id = project_id
+        self.cwd = cwd
+        self.shell = shell
+        self.q: queue.Queue = queue.Queue()
+        self.alive = True
+        self.conpty = None
+        self.proc = None
+        self._start_pipe()
+        threading.Thread(target=self._pump, daemon=True).start()
+
+    def _argv(self) -> list[str]:
+        if self.shell == "cmd":
+            return ["cmd.exe"]
+        if self.shell == "bash":
+            bash = git_bash_exe()
+            if bash:
+                return [bash, "--login", "-i"]
+        return ["powershell.exe", "-NoLogo", "-NoExit"]
+
+    def _start_pipe(self) -> None:
+        flags = 0
+        if os.name == "nt":
+            flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) | getattr(
+                subprocess, "CREATE_NEW_PROCESS_GROUP", 0
+            )
+        self.proc = subprocess.Popen(
+            self._argv(),
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            cwd=self.cwd,
+            bufsize=0,
+            creationflags=flags,
+            shell=False,
+        )
+
+    def _pump(self) -> None:
+        try:
+            if self.conpty:
+                while self.alive:
+                    chunk = self.conpty.read(4096)
+                    if not chunk:
+                        if not self.conpty.alive():
+                            break
+                        time.sleep(0.02)
+                        continue
+                    self.q.put(chunk.decode("utf-8", "replace"))
+            else:
+                out = self.proc.stdout if self.proc else None
+                if not out:
+                    return
+                while self.alive:
+                    chunk = out.read(4096)
+                    if not chunk:
+                        break
+                    text = chunk.decode("utf-8", "replace") if isinstance(chunk, bytes) else chunk
+                    text = text.replace("\r\n", "\n").replace("\n", "\r\n")
+                    self.q.put(text)
+        finally:
+            self.alive = False
+            self.q.put(None)
+
+    def write(self, data: str) -> None:
+        if not self.alive:
+            return
+        data = data or ""
+        if "\n" in data or "\r" in data:
+            self._note_cd(data.replace("\r", "\n").split("\n")[0])
+        if self.conpty:
+            self.conpty.write(data.encode("utf-8"))
+            return
+        if not self.proc or not self.proc.stdin:
+            return
+        if data == "\r":
+            data = "\r\n"
+        elif data.endswith("\r") and not data.endswith("\r\n"):
+            data = data[:-1] + "\r\n"
+        self.proc.stdin.write(data.encode("utf-8"))
+        self.proc.stdin.flush()
+
+    def _note_cd(self, line: str) -> None:
+        m = re.match(r"^\s*(?:cd|chdir|Set-Location|sl|pushd)\s*(.*)$", line or "", re.I)
+        if not m:
+            return
+        dest = m.group(1).strip().strip('"').strip("'")
+        if dest.lower() in ("", "~", "$home"):
+            nxt = Path.home()
+        else:
+            nxt = Path(dest)
+            if not nxt.is_absolute():
+                nxt = Path(self.cwd) / dest
+        try:
+            nxt = nxt.resolve()
+            if nxt.is_dir():
+                self.cwd = str(nxt)
+        except OSError:
+            pass
+
+    def resize(self, cols: int, rows: int) -> None:
+        if self.conpty:
+            self.conpty.resize(cols, rows)
+
+    def close(self) -> None:
+        self.alive = False
+        if self.conpty:
+            self.conpty.close()
+            self.conpty = None
+        if self.proc and self.proc.poll() is None:
+            try:
+                self.proc.terminate()
+            except OSError:
+                pass
+
+
+def term_open(project: dict, shell: str, cwd: str = "", cols: int = 100, rows: int = 32) -> TermSession:
+    sid = uuid.uuid4().hex[:10]
+    directory = _cwd_allowed(project, cwd)
+    sess = TermSession(sid, project["id"], directory, (shell or "powershell").lower(), cols, rows)
+    with TERM_LOCK:
+        old = [s for s in TERM_SESSIONS.values() if s.project_id == project["id"]]
+        TERM_SESSIONS[sid] = sess
+    for prev in old:
+        prev.close()
+        with TERM_LOCK:
+            TERM_SESSIONS.pop(prev.id, None)
+    return sess
+
+
+def term_get(sid: str) -> TermSession | None:
+    with TERM_LOCK:
+        return TERM_SESSIONS.get(sid)
+
+
+def term_close(sid: str) -> None:
+    with TERM_LOCK:
+        sess = TERM_SESSIONS.pop(sid, None)
+    if sess:
+        sess.close()
+
+
+_CMD_CACHE: dict = {"t": 0.0, "names": []}
+_PATH_CMDS = ("cd", "chdir", "dir", "ls", "cat", "type", "Get-ChildItem", "Get-Content", "Set-Location", "sl", "pushd", "popd", "mkdir", "md", "rm", "rmdir", "del", "copy", "move", "ren", "echo", "pwd", "git", "python", "py", "node", "npm")
+
+
+def _ps_command_names() -> list[str]:
+    now = time.time()
+    if _CMD_CACHE["names"] and now - _CMD_CACHE["t"] < 300:
+        return _CMD_CACHE["names"]
+    names = set(_PATH_CMDS)
+    try:
+        proc = subprocess.run(
+            [
+                "powershell.exe",
+                "-NoProfile",
+                "-Command",
+                "Get-Command -CommandType Cmdlet,Function,Alias,Application "
+                "| Select-Object -ExpandProperty Name",
+            ],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=8,
+        )
+        for ln in (proc.stdout or "").splitlines():
+            n = ln.strip()
+            if n:
+                names.add(n)
+    except Exception:
+        pass
+    for part in os.environ.get("PATH", "").split(os.pathsep):
+        try:
+            root = Path(part)
+            if not root.is_dir():
+                continue
+            for child in root.iterdir():
+                if child.is_file():
+                    names.add(child.stem if os.name == "nt" else child.name)
+        except OSError:
+            continue
+    out = sorted(names, key=str.lower)
+    if len(out) > 20:
+        _CMD_CACHE["t"] = now
+        _CMD_CACHE["names"] = out
+    return out
+
+
+def _token_at(line: str, cur: int) -> tuple[int, int, str]:
+    cur = max(0, min(int(cur), len(line)))
+    i = cur
+    while i > 0 and not line[i - 1].isspace():
+        i -= 1
+    j = cur
+    while j < len(line) and not line[j].isspace():
+        j += 1
+    return i, j, line[i:j]
+
+
+def _quote_token(text: str) -> str:
+    if any(ch.isspace() for ch in text):
+        return '"' + text.replace('"', '\\"') + '"'
+    return text
+
+
+def _file_matches(cwd: str, token: str) -> list[str]:
+    sep = "\\" if os.name == "nt" else "/"
+    raw = (token or "").replace("/", sep)
+    if raw.startswith("~"):
+        raw = str(Path.home()) + raw[1:]
+    if raw.endswith(sep):
+        directory = Path(raw) if os.path.isabs(raw) else Path(cwd) / raw
+        prefix = ""
+        keep = raw
+    else:
+        parent, name = os.path.split(raw)
+        prefix = name
+        if parent:
+            directory = Path(parent) if os.path.isabs(parent) else Path(cwd) / parent
+            keep = parent + sep
+        else:
+            directory = Path(cwd)
+            keep = ""
+    try:
+        directory = directory.resolve()
+    except OSError:
+        return []
+    if not directory.is_dir():
+        return []
+    want = prefix.lower()
+    out = []
+    try:
+        kids = list(directory.iterdir())
+    except OSError:
+        return []
+    for child in sorted(kids, key=lambda p: p.name.lower()):
+        if want and not child.name.lower().startswith(want):
+            continue
+        piece = keep + child.name
+        if child.is_dir():
+            piece += sep
+        out.append(_quote_token(piece))
+        if len(out) >= 80:
+            break
+    return out
+
+
+def _common_prefix(items: list[str]) -> str:
+    if not items:
+        return ""
+    probe = items[0]
+    for other in items[1:]:
+        n = 0
+        limit = min(len(probe), len(other))
+        while n < limit and probe[n].lower() == other[n].lower():
+            n += 1
+        probe = probe[:n]
+        if not probe:
+            break
+    return probe
+
+
+def term_complete(sess: TermSession, line: str, cursor: int) -> dict:
+    start, end, token = _token_at(line, cursor)
+    first = not line[:start].strip()
+    files = _file_matches(sess.cwd, token)
+    matches = list(files)
+    if first:
+        want = token.lower()
+        for name in _ps_command_names():
+            if name.lower().startswith(want) and name not in matches:
+                matches.append(name)
+            if len(matches) >= 120:
+                break
+    matches = matches[:80]
+    return {
+        "from": start,
+        "to": end,
+        "token": token,
+        "matches": matches,
+        "common": _common_prefix(matches),
+        "cwd": sess.cwd,
+    }
 
 
 def recover_orphans() -> None:
