@@ -244,9 +244,27 @@ def exit_code_of(result: dict) -> int:
         return 1
 
 
-def git_has_changes(directory: str) -> bool:
+def _porcelain_kind(code: str) -> str:
+    xy = (code + "  ")[:2]
+    if xy.strip() == "??":
+        return "untracked"
+    if "U" in xy or xy in ("AA", "DD"):
+        return "conflict"
+    if "R" in xy:
+        return "renamed"
+    if "A" in xy:
+        return "added"
+    if "D" in xy:
+        return "deleted"
+    if "M" in xy:
+        return "modified"
+    return "changed"
+
+
+def git_dirty_details(directory: str, limit: int = 16) -> tuple[bool, list[str]]:
+    """Parse `git status --porcelain` into short why-dirty lines."""
     if not directory or not is_git_repo(directory):
-        return False
+        return False, []
     try:
         proc = subprocess.run(
             ["git", "-C", directory, "status", "--porcelain"],
@@ -257,8 +275,24 @@ def git_has_changes(directory: str) -> bool:
             timeout=15,
         )
     except Exception:
-        return False
-    return bool((proc.stdout or "").strip())
+        return False, []
+    lines = [ln for ln in (proc.stdout or "").splitlines() if ln.strip()]
+    why = []
+    for ln in lines[:limit]:
+        code = ln[:2]
+        path = ln[3:].strip() if len(ln) > 3 else ln.strip()
+        if " -> " in path:
+            path = path.split(" -> ", 1)[-1]
+        why.append(f"{_porcelain_kind(code)} {path}")
+    extra = len(lines) - limit
+    if extra > 0:
+        why.append(f"…{extra} more")
+    return bool(lines), why
+
+
+def git_has_changes(directory: str) -> bool:
+    dirty, _ = git_dirty_details(directory)
+    return dirty
 
 
 def classify_run(result: dict, directory: str) -> tuple[str, str, int]:
@@ -705,6 +739,7 @@ def list_project_worktrees(pid: str) -> list:
             code, when, _ = git_run(path, ["log", "-1", "--format=%cI"])
             if code == 0 and when:
                 commit_at = when
+        dirty, dirty_why = git_dirty_details(path) if git else (False, [])
         out.append(
             {
                 "name": name,
@@ -716,7 +751,8 @@ def list_project_worktrees(pid: str) -> list:
                 "dir": path,
                 "branch": branch,
                 "head": (head or "")[:12] or None,
-                "dirty": git_has_changes(path) if git else False,
+                "dirty": dirty,
+                "dirty_why": dirty_why,
                 "started_at": run.get("started_at"),
                 "commit_at": commit_at,
             }

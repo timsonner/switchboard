@@ -134,6 +134,17 @@
     .worktree-card .row { margin-top: 0.35rem; }
     .worktree-card { cursor: pointer; }
     .worktree-card.active { border-color: var(--accent); background: #221c12; }
+    .dirty-why {
+      margin-top: 0.4rem;
+      padding: 0.35rem 0.45rem;
+      border: 1px dashed var(--line);
+      border-radius: 6px;
+      background: #10141b;
+      font: 0.72rem/1.4 ui-monospace, monospace;
+      color: var(--accent);
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
     .git-graph { position: relative; min-height: 8rem; }
     .git-graph-svg { position: absolute; left: 0; top: 0; overflow: visible; }
     .git-graph-rows { position: relative; z-index: 1; }
@@ -1039,16 +1050,27 @@
         const el = document.createElement("div");
         const rid = wt.run_id ? String(wt.run_id) : "";
         el.className = "card worktree-card" + (rid && rid === stageRunId ? " active" : "");
-        const dirty = wt.dirty ? '<span class="status-queued">dirty</span>' : '<span class="ghost">clean</span>';
+        const dirty = wt.dirty
+          ? '<button type="button" class="small status-queued" data-dirty title="Show uncommitted files">dirty</button>'
+          : '<span class="ghost">clean</span>';
+        const why = (wt.dirty_why || []).join("\n") || "git status reports changes";
         const when = fmtTime(wt.started_at || wt.commit_at);
         el.innerHTML = `<span class="status-${escapeHtml(wt.status || "done")}">${escapeHtml(wt.worker || "?")} · ${escapeHtml(wt.status || "")}${wt.role ? " · " + escapeHtml(wt.role) : ""}</span>
           <small>${when ? escapeHtml(when) + " · " : ""}${escapeHtml(wt.branch || wt.name)} · ${escapeHtml(wt.head || "no HEAD")}${wt.contest_id ? " · contest " + escapeHtml(wt.contest_id) : ""}</small>
           <small>${escapeHtml(wt.dir || "")}</small>
           <div class="row">
-            <span>${dirty}</span>
+            ${dirty}
             ${rid ? '<button type="button" class="small" data-diff>diff</button><button type="button" class="small" data-transcript>transcript</button>' : ""}
-          </div>`;
+          </div>
+          <pre class="dirty-why" hidden>${escapeHtml(why)}</pre>`;
         el.onclick = () => { if (rid) stageRunId = rid; renderStage(); };
+        if (wt.dirty) {
+          el.querySelector("[data-dirty]").onclick = (e) => {
+            e.stopPropagation();
+            const box = el.querySelector(".dirty-why");
+            box.hidden = !box.hidden;
+          };
+        }
         if (rid) {
           el.querySelector("[data-diff]").onclick = (e) => { e.stopPropagation(); openDiff(rid); };
           el.querySelector("[data-transcript]").onclick = (e) => { e.stopPropagation(); openTranscript(rid); };
