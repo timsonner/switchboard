@@ -1152,6 +1152,11 @@
       }).catch(() => {});
     }
 
+    function termEol() {
+      const shell = $("termShell") ? $("termShell").value : "powershell";
+      return shell === "bash" ? "\n" : "\r\n";
+    }
+
     function termEraseInput() {
       const s = termCooked;
       if (s.cur < s.buf.length) term.write("\x1b[" + (s.buf.length - s.cur) + "C");
@@ -1232,6 +1237,30 @@
       }
     }
 
+    function isTermClearCommand(line) {
+      const w = (line || "").trim().split(/\s+/)[0] || "";
+      return /^(cls|clear|Clear-Host)$/i.test(w);
+    }
+
+    function reconnectTerm() {
+      const old = termId;
+      termId = null;
+      termProject = null;
+      termCooked.buf = "";
+      termCooked.cur = 0;
+      termCooked.histIdx = termCooked.hist.length;
+      closeTermStream();
+      if (old) {
+        api("/api/terminal", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "close", id: old }),
+        }).catch(() => {});
+      }
+      if (term) term.reset();
+      ensureTerm();
+    }
+
     function handleTermInput(data) {
       const s = termCooked;
       if (data === "\t") {
@@ -1239,9 +1268,20 @@
         return;
       }
       s.tabMatches = null;
+      if (data === "\x0c") {
+        reconnectTerm();
+        return;
+      }
       if (data === "\r") {
-        term.write("\r\n");
         const line = s.buf;
+        if (isTermClearCommand(line)) {
+          if (line.trim()) {
+            s.hist.push(line);
+            if (s.hist.length > 200) s.hist.shift();
+          }
+          reconnectTerm();
+          return;
+        }
         if (line.trim()) {
           s.hist.push(line);
           if (s.hist.length > 200) s.hist.shift();
@@ -1249,7 +1289,8 @@
         s.histIdx = s.hist.length;
         s.buf = "";
         s.cur = 0;
-        termSend(line + "\r\n");
+        term.write("\r\n");
+        termSend(line + termEol());
         return;
       }
       if (data === "\x7f" || data === "\b") {
@@ -2152,15 +2193,7 @@
     });
     const termReconnect = $("termReconnect");
     if (termReconnect) {
-      termReconnect.onclick = () => {
-        termId = null;
-        termProject = null;
-        termCooked.buf = "";
-        termCooked.cur = 0;
-        termCooked.histIdx = termCooked.hist.length;
-        if (term) term.reset();
-        ensureTerm();
-      };
+      termReconnect.onclick = () => reconnectTerm();
     }
     const termShellSel = $("termShell");
     if (termShellSel) {

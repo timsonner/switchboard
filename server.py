@@ -2281,6 +2281,22 @@ def git_bash_exe() -> str | None:
     return shutil.which("bash")
 
 
+_BASH_TTY_NOISE = (
+    "cannot set terminal process group",
+    "no job control in this shell",
+)
+
+
+def _is_bash_tty_noise(line: str) -> bool:
+    low = (line or "").strip().lower()
+    return any(s in low for s in _BASH_TTY_NOISE)
+
+
+def _bash_noise_prefix(hold: str) -> bool:
+    low = (hold or "").lstrip().lower()
+    return bool(low) and ("bash:".startswith(low) or low.startswith("bash:"))
+
+
 def _cwd_allowed(project: dict, raw: str) -> str:
     root = Path(project["dir"]).resolve()
     want = Path(raw).resolve() if raw else root
@@ -2307,6 +2323,8 @@ class TermSession:
         self.alive = True
         self.conpty = None
         self.proc = None
+        self._out_hold = ""
+        self._last_cmd = ""
         self._start_pipe()
         threading.Thread(target=self._pump, daemon=True).start()
 
@@ -2317,7 +2335,7 @@ class TermSession:
             bash = git_bash_exe()
             if bash:
                 return [bash, "--login", "-i"]
-        return ["powershell.exe", "-NoLogo", "-NoExit"]
+        return ["powershell.exe", "-NoExit"]
 
     def _start_pipe(self) -> None:
         flags = 0
@@ -2336,6 +2354,30 @@ class TermSession:
             shell=False,
         )
 
+    def _emit_shell_text(self, text: str) -> None:
+        text = (text or "").replace("\r\n", "\n")
+        self._out_hold += text
+        while "\n" in self._out_hold:
+            line, self._out_hold = self._out_hold.split("\n", 1)
+            if _is_bash_tty_noise(line):
+                continue
+            if self._last_cmd and line.replace("\r", "").strip() == self._last_cmd:
+                self._last_cmd = ""
+                continue
+            self.q.put(line + "\r\n")
+        hold = self._out_hold.replace("\r", "")
+        if not hold:
+            self._out_hold = ""
+            return
+        if _bash_noise_prefix(hold):
+            return
+        if self._last_cmd and (
+            hold.strip() == self._last_cmd or self._last_cmd.startswith(hold.strip())
+        ):
+            return
+        self.q.put(hold.replace("\n", "\r\n"))
+        self._out_hold = ""
+
     def _pump(self) -> None:
         try:
             if self.conpty:
@@ -2346,7 +2388,7 @@ class TermSession:
                             break
                         time.sleep(0.02)
                         continue
-                    self.q.put(chunk.decode("utf-8", "replace"))
+                    self._emit_shell_text(chunk.decode("utf-8", "replace"))
             else:
                 out = self.proc.stdout if self.proc else None
                 if not out:
@@ -2356,9 +2398,10 @@ class TermSession:
                     if not chunk:
                         break
                     text = chunk.decode("utf-8", "replace") if isinstance(chunk, bytes) else chunk
-                    text = text.replace("\r\n", "\n").replace("\n", "\r\n")
-                    self.q.put(text)
+                    self._emit_shell_text(text)
         finally:
+            if self._out_hold and not _is_bash_tty_noise(self._out_hold):
+                self.q.put(self._out_hold.replace("\n", "\r\n"))
             self.alive = False
             self.q.put(None)
 
@@ -2367,16 +2410,22 @@ class TermSession:
             return
         data = data or ""
         if "\n" in data or "\r" in data:
-            self._note_cd(data.replace("\r", "\n").split("\n")[0])
+            cmd = data.replace("\r", "\n").split("\n")[0].strip()
+            self._last_cmd = cmd
+            self._note_cd(cmd)
+        if self.shell == "bash":
+            data = data.replace("\r\n", "\n").replace("\r", "\n")
+            while "\n\n" in data:
+                data = data.replace("\n\n", "\n")
+        elif data == "\r":
+            data = "\r\n"
+        elif data.endswith("\r") and not data.endswith("\r\n"):
+            data = data[:-1] + "\r\n"
         if self.conpty:
             self.conpty.write(data.encode("utf-8"))
             return
         if not self.proc or not self.proc.stdin:
             return
-        if data == "\r":
-            data = "\r\n"
-        elif data.endswith("\r") and not data.endswith("\r\n"):
-            data = data[:-1] + "\r\n"
         self.proc.stdin.write(data.encode("utf-8"))
         self.proc.stdin.flush()
 
@@ -2441,7 +2490,7 @@ def term_close(sid: str) -> None:
 
 
 _CMD_CACHE: dict = {"t": 0.0, "names": []}
-_PATH_CMDS = ("cd", "chdir", "dir", "ls", "cat", "type", "Get-ChildItem", "Get-Content", "Set-Location", "sl", "pushd", "popd", "mkdir", "md", "rm", "rmdir", "del", "copy", "move", "ren", "echo", "pwd", "git", "python", "py", "node", "npm")
+_PATH_CMDS = ("cd", "chdir", "dir", "ls", "cat", "type", "Get-ChildItem", "Get-Content", "Set-Location", "sl", "pushd", "popd", "mkdir", "md", "rm", "rmdir", "del", "copy", "move", "ren", "echo", "pwd", "cls", "clear", "Clear-Host", "git", "python", "py", "node", "npm")
 
 
 def _ps_command_names() -> list[str]:
